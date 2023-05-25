@@ -6,7 +6,12 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-clap = { version = "4.2.7", features = ["derive"] }
 env_logger = "0.10.0"
+flate2 = "1.0.26"
 log = "0.4.17"
-reqwest = { version = "0.11.18", features = ["blocking", "json", "serde_json"] }
+reqwest = { version = "0.11.18", features = ["blocking", "json", "serde_json", "gzip"] }
+serde = { version = "1.0.163", features = ["derive"] }
+tar = "0.4.38"
+yara = "0.20.0"
+yara-sys = "0.20.0"
+zip = "0.6.6"
