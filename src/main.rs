@@ -10,6 +10,8 @@ use scanner::{scan_distribution, DistributionScanResults};
 
 use crate::api::SubmitJobResultsBody;
 
+const WAIT_DURATION: u64 = 60;
+
 fn create_inspector_url(name: &String, version: &String, download_url: &String, path: &Path) -> String {
     let mut url = reqwest::Url::parse(download_url).unwrap();
     let new_path = format!(
@@ -76,8 +78,8 @@ fn main() -> Result<(), DragonflyError> {
             println!("Found job! Scanning {}@{}", job.name, job.version);
             do_job(&mut client, job)?;
         } else {
-            println!("No job found! Trying again in 60 seconds...");
-            thread::sleep(Duration::from_secs(5));
+            println!("No job found! Trying again in {WAIT_DURATION} seconds...");
+            thread::sleep(Duration::from_secs(WAIT_DURATION));
         }
     }
 }
