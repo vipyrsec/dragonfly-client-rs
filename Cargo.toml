@@ -5,6 +5,13 @@ edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1
+opt-level = "z"
+panic = "abort"
+
 [dependencies]
 env_logger = "0.10.0"
 flate2 = "1.0.26"
@@ -13,5 +20,5 @@ reqwest = { version = "0.11.18", features = ["blocking", "json", "serde_json", "
 serde = { version = "1.0.163", features = ["derive"] }
 tar = "0.4.38"
 yara = "0.20.0"
-yara-sys = "0.20.0"
+yara-sys = { version = "0.20.0", features = [ "yara-static" ] }
 zip = "0.6.6"
