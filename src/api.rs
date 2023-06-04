@@ -1,4 +1,4 @@
-use std::{collections::{HashMap, HashSet}, io::{Read, Cursor}};
+use std::{collections::{HashMap, HashSet}, io::{Read, Cursor}, sync::Mutex};
 
 use flate2::read::GzDecoder;
 use reqwest::blocking::Client;
@@ -41,16 +41,34 @@ pub struct GetRulesResponse {
     rules: HashMap<String, String>,
 }
 
-pub struct DragonflyClient {
-    pub client: Client,
+pub struct State {
     pub rules: yara::Rules,
     pub hash: String,
+}
+
+pub struct DragonflyClient {
+    pub client: Client,
+    pub state: State,
 }
 
 fn fetch_rules(client: &Client) -> Result<GetRulesResponse, reqwest::Error> {
     client.get(format!("{BASE_URL}/rules"))
         .send()?
         .json()
+}
+
+impl State {
+    pub fn new(rules: yara::Rules, hash: String) -> Self {
+        Self { rules, hash }
+    }
+
+    pub fn set_hash(&mut self, hash: String) {
+        self.hash = hash;
+    }
+
+    pub fn set_rules(&mut self, rules: yara::Rules) {
+        self.rules = rules;
+    }
 }
 
 impl DragonflyClient {
@@ -68,8 +86,13 @@ impl DragonflyClient {
         let compiler = Compiler::new()?
             .add_rules_str(&rules_str)?;
         let rules = compiler.compile_rules()?;
+        
+        let state = State::new(rules, hash);
 
-        Ok(Self { client, rules, hash})
+        Ok(Self { 
+            client, 
+            state,
+        })
     }
 
     pub fn fetch_tarball(&self, download_url: &String) -> Result<tar::Archive<Cursor<Vec<u8>>>, DragonflyError> {
@@ -102,16 +125,10 @@ impl DragonflyClient {
         }
     }
     
-
-    pub fn get_compiled_rules(&self) -> &yara::Rules {
-        &self.rules
-    }
-
     pub fn sync_rules(&mut self) -> Result<(), DragonflyError> {
-        let rules = fetch_rules(&self.client)?;
-        self.hash = rules.hash;
+        let response = fetch_rules(&self.client)?;
         
-        let rules_str = rules.rules
+        let rules_str = response.rules
             .iter()
             .map(|(_, v)| v.to_owned())
             .collect::<Vec<String>>()
@@ -120,7 +137,9 @@ impl DragonflyClient {
         let compiler = Compiler::new()?
             .add_rules_str(&rules_str)?;
         let compiled_rules = compiler.compile_rules()?;
-        self.rules = compiled_rules;
+
+        self.state.set_hash(response.hash);
+        self.state.set_rules(compiled_rules);
 
         Ok(())
     }

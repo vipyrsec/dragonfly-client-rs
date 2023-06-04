@@ -2,7 +2,7 @@ mod api;
 mod error;
 mod scanner;
 
-use std::{path::Path, thread, time::Duration};
+use std::{path::Path, thread, time::Duration, sync::{Arc, Mutex}, ops::DerefMut};
 
 use api::{DragonflyClient, Job};
 use error::DragonflyError;
@@ -28,11 +28,7 @@ fn create_inspector_url(name: &String, version: &String, download_url: &String, 
     url.into()
 }
 
-fn do_job(client: &mut DragonflyClient, job: Job) -> Result<(), DragonflyError> {
-        if client.hash !=job.hash {
-            client.sync_rules()?;
-        }
-
+fn do_job(client: &DragonflyClient, job: Job) -> Result<(), DragonflyError> {
         let mut distribution_results: Vec<DistributionScanResults> = Vec::new();
 
         for download_url in job.distributions {
@@ -57,7 +53,9 @@ fn do_job(client: &mut DragonflyClient, job: Job) -> Result<(), DragonflyError> 
         } else {
             None
         };
-
+        
+        println!("Finished job {}@{}! Submitting results...", job.name, job.version);
+        println!("{}", "-".repeat(10));
         client.submit_job_results(SubmitJobResultsBody{ 
             name: &job.name,
             version: &job.version,
@@ -71,15 +69,47 @@ fn do_job(client: &mut DragonflyClient, job: Job) -> Result<(), DragonflyError> 
 }
 
 fn main() -> Result<(), DragonflyError> {
-    let mut client = DragonflyClient::new()?;
+    let client = Arc::new(Mutex::new(DragonflyClient::new()?));
     
-    loop {
-        if let Some(job) = client.get_job()? {
-            println!("Found job! Scanning {}@{}", job.name, job.version);
-            do_job(&mut client, job)?;
-        } else {
-            println!("No job found! Trying again in {WAIT_DURATION} seconds...");
-            thread::sleep(Duration::from_secs(WAIT_DURATION));
-        }
+    let mut handles = Vec::new();
+
+    for _ in 0..5 {
+        let client = Arc::clone(&client);
+        let handle = thread::spawn(move || {
+            loop {
+                let mut lock = client.lock().unwrap();
+                let job_response = lock.get_job();
+                match job_response {
+                    Ok(response) => match response {
+                        Some(job) => { 
+                            println!("Found job! Scanning {}@{}", job.name, job.version);
+                            if lock.state.hash != job.hash {
+                                if let Err(err) = lock.sync_rules() {
+                                    println!("Failed to sync rules: {:#?}", err);
+                                }
+                            }
+
+                            if let Err(err) = do_job(&lock, job) {
+                                println!("Unexpected error occured: {:#?}", err)
+                            }
+
+                        },
+                        None => {
+                            println!("No job found! Trying again in {WAIT_DURATION} seconds...");
+                            thread::sleep(Duration::from_secs(WAIT_DURATION));
+                        }
+                    }
+                    Err(err) => println!("Unexpected HTTP error: {:#?}", err),
+                }
+            }
+        });
+
+        handles.push(handle);
     }
+
+    for handle in handles {
+        handle.join().unwrap();
+    }
+
+    Ok(())
 }

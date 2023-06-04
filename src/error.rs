@@ -1,4 +1,4 @@
-use std::io;
+use std::{io, sync::PoisonError};
 
 use yara;
 use reqwest;
