@@ -1,4 +1,4 @@
-use std::{collections::{HashMap, HashSet}, io::{Read, Cursor}};
+use std::{collections::{HashMap, HashSet}, io::{Read, Cursor}, sync::Mutex};
 
 use flate2::read::GzDecoder;
 use reqwest::blocking::Client;
@@ -41,16 +41,53 @@ pub struct GetRulesResponse {
     rules: HashMap<String, String>,
 }
 
-pub struct DragonflyClient {
-    pub client: Client,
+pub struct State {
     pub rules: yara::Rules,
     pub hash: String,
+}
+
+pub struct DragonflyClient {
+    pub client: Client,
+    pub state: Mutex<State>,
 }
 
 fn fetch_rules(client: &Client) -> Result<GetRulesResponse, reqwest::Error> {
     client.get(format!("{BASE_URL}/rules"))
         .send()?
         .json()
+}
+
+impl State {
+    pub fn new(rules: yara::Rules, hash: String) -> Self {
+        Self { rules, hash }
+    }
+
+    pub fn set_hash(&mut self, hash: String) {
+        self.hash = hash;
+    }
+
+    pub fn set_rules(&mut self, rules: yara::Rules) {
+        self.rules = rules;
+    }
+
+    pub fn sync(&mut self, http_client: &Client) -> Result<(), DragonflyError> {
+        let response = fetch_rules(http_client)?;
+        
+        let rules_str = response.rules
+            .iter()
+            .map(|(_, v)| v.to_owned())
+            .collect::<Vec<String>>()
+            .join("\n");
+        
+        let compiler = Compiler::new()?
+            .add_rules_str(&rules_str)?;
+        let compiled_rules = compiler.compile_rules()?;
+        
+        self.set_hash(response.hash);
+        self.set_rules(compiled_rules);
+
+        Ok(())
+    }
 }
 
 impl DragonflyClient {
@@ -68,8 +105,13 @@ impl DragonflyClient {
         let compiler = Compiler::new()?
             .add_rules_str(&rules_str)?;
         let rules = compiler.compile_rules()?;
+        
+        let state: Mutex<State> = State::new(rules, hash).into();
 
-        Ok(Self { client, rules, hash})
+        Ok(Self { 
+            client, 
+            state,
+        })
     }
 
     pub fn fetch_tarball(&self, download_url: &String) -> Result<tar::Archive<Cursor<Vec<u8>>>, DragonflyError> {
@@ -103,28 +145,6 @@ impl DragonflyClient {
     }
     
 
-    pub fn get_compiled_rules(&self) -> &yara::Rules {
-        &self.rules
-    }
-
-    pub fn sync_rules(&mut self) -> Result<(), DragonflyError> {
-        let rules = fetch_rules(&self.client)?;
-        self.hash = rules.hash;
-        
-        let rules_str = rules.rules
-            .iter()
-            .map(|(_, v)| v.to_owned())
-            .collect::<Vec<String>>()
-            .join("\n");
-        
-        let compiler = Compiler::new()?
-            .add_rules_str(&rules_str)?;
-        let compiled_rules = compiler.compile_rules()?;
-        self.rules = compiled_rules;
-
-        Ok(())
-    }
-
 
     pub fn get_job(&self) -> reqwest::Result<Option<Job>> {
         let res: GetJobResponse = self.client.post(format!("{BASE_URL}/job"))
@@ -145,5 +165,10 @@ impl DragonflyClient {
             .send()?;
 
         Ok(())
+    }
+
+    pub fn get_http_client(&self) -> &Client {
+        // Return a reference to the underlying HTTP Client
+        &self.client
     }
 }

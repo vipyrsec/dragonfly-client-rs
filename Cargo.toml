@@ -19,6 +19,9 @@ log = "0.4.17"
 reqwest = { version = "0.11.18", features = ["blocking", "json", "serde_json", "gzip"] }
 serde = { version = "1.0.163", features = ["derive"] }
 tar = "0.4.38"
+threadpool = "1.8.1"
+tracing = "0.1.37"
+tracing-subscriber = "0.3.17"
 yara = "0.20.0"
 yara-sys = { version = "0.20.0", features = [ "yara-static" ] }
 zip = "0.6.6"

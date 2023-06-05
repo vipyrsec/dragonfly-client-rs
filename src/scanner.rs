@@ -66,10 +66,12 @@ impl DistributionScanResults {
 pub fn scan_distribution(client: &DragonflyClient, download_url: &String) -> Result<DistributionScanResults, DragonflyError> {
     if download_url.ends_with("tar.gz") {
         let mut tar = client.fetch_tarball(download_url)?;
-        scan_tarball(&mut tar, download_url, client.get_compiled_rules())
+        let rules = { &client.state.lock().unwrap().rules };
+        scan_tarball(&mut tar, download_url, rules)
     } else {
         let mut zip = client.fetch_zipfile(&download_url)?;
-        scan_zipfile(&mut zip, download_url, client.get_compiled_rules())
+        let rules = { &client.state.lock().unwrap().rules };
+        scan_zipfile(&mut zip, download_url, rules)
     }
 }
 
