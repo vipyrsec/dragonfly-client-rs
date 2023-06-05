@@ -10,6 +10,10 @@ RUN curl -sL https://github.com/VirusTotal/yara/archive/refs/tags/v4.3.1.tar.gz 
 COPY .cargo/ .cargo/
 COPY Cargo.toml .
 COPY Cargo.lock .
+
+ARG dragonfly_base_url 
+ENV DRAGONFLY_BASE_URL=$dragonfly_base_url
+
 RUN RUSTFLAGS='-L/usr/local/lib' cargo build --release
 
 RUN rm target/release/deps/dragonfly_rs*

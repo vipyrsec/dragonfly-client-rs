@@ -8,7 +8,7 @@ use zip::ZipArchive;
 
 use crate::error::DragonflyError;
 
-const BASE_URL: &str = "http://127.0.0.1:8000";
+const BASE_URL: &'static str = env!("DRAGONFLY_BASE_URL");
 const MAX_SIZE: usize = 250000000;
 
 #[derive(Debug, Serialize)]
