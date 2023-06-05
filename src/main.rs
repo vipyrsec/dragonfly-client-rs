@@ -2,11 +2,12 @@ mod api;
 mod error;
 mod scanner;
 
-use std::{path::Path, thread, time::Duration, sync::{Arc, Mutex}, ops::DerefMut};
+use std::{path::Path, thread, time::Duration, sync::Arc};
 
 use api::{DragonflyClient, Job};
 use error::DragonflyError;
 use scanner::{scan_distribution, DistributionScanResults};
+use threadpool::ThreadPool;
 
 use crate::api::SubmitJobResultsBody;
 
@@ -55,7 +56,6 @@ fn do_job(client: &DragonflyClient, job: Job) -> Result<(), DragonflyError> {
         };
         
         println!("Finished job {}@{}! Submitting results...", job.name, job.version);
-        println!("{}", "-".repeat(10));
         client.submit_job_results(SubmitJobResultsBody{ 
             name: &job.name,
             version: &job.version,
@@ -69,27 +69,29 @@ fn do_job(client: &DragonflyClient, job: Job) -> Result<(), DragonflyError> {
 }
 
 fn main() -> Result<(), DragonflyError> {
-    let client = Arc::new(Mutex::new(DragonflyClient::new()?));
+    let client = Arc::new(DragonflyClient::new()?);
     
-    let mut handles = Vec::new();
+    let n_jobs = 5;
+    let pool = ThreadPool::new(n_jobs);
 
-    for _ in 0..5 {
+    for _ in 0..n_jobs {
         let client = Arc::clone(&client);
-        let handle = thread::spawn(move || {
+        pool.execute(move || {
             loop {
-                let mut lock = client.lock().unwrap();
-                let job_response = lock.get_job();
-                match job_response {
+                match client.get_job() {
                     Ok(response) => match response {
                         Some(job) => { 
                             println!("Found job! Scanning {}@{}", job.name, job.version);
-                            if lock.state.hash != job.hash {
-                                if let Err(err) = lock.sync_rules() {
-                                    println!("Failed to sync rules: {:#?}", err);
+                            {
+                                let mut state = client.state.lock().unwrap();
+                                if state.hash != job.hash {
+                                    if let Err(err) = state.sync(client.get_http_client()) {
+                                        println!("Failed to sync rules: {:#?}", err);
+                                    }
                                 }
                             }
 
-                            if let Err(err) = do_job(&lock, job) {
+                            if let Err(err) = do_job(&client, job) {
                                 println!("Unexpected error occured: {:#?}", err)
                             }
 
@@ -103,13 +105,9 @@ fn main() -> Result<(), DragonflyError> {
                 }
             }
         });
-
-        handles.push(handle);
     }
-
-    for handle in handles {
-        handle.join().unwrap();
-    }
+    
+    pool.join();
 
     Ok(())
 }

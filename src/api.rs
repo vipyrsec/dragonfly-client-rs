@@ -48,7 +48,7 @@ pub struct State {
 
 pub struct DragonflyClient {
     pub client: Client,
-    pub state: State,
+    pub state: Mutex<State>,
 }
 
 fn fetch_rules(client: &Client) -> Result<GetRulesResponse, reqwest::Error> {
@@ -69,6 +69,25 @@ impl State {
     pub fn set_rules(&mut self, rules: yara::Rules) {
         self.rules = rules;
     }
+
+    pub fn sync(&mut self, http_client: &Client) -> Result<(), DragonflyError> {
+        let response = fetch_rules(http_client)?;
+        
+        let rules_str = response.rules
+            .iter()
+            .map(|(_, v)| v.to_owned())
+            .collect::<Vec<String>>()
+            .join("\n");
+        
+        let compiler = Compiler::new()?
+            .add_rules_str(&rules_str)?;
+        let compiled_rules = compiler.compile_rules()?;
+        
+        self.set_hash(response.hash);
+        self.set_rules(compiled_rules);
+
+        Ok(())
+    }
 }
 
 impl DragonflyClient {
@@ -87,7 +106,7 @@ impl DragonflyClient {
             .add_rules_str(&rules_str)?;
         let rules = compiler.compile_rules()?;
         
-        let state = State::new(rules, hash);
+        let state: Mutex<State> = State::new(rules, hash).into();
 
         Ok(Self { 
             client, 
@@ -125,24 +144,6 @@ impl DragonflyClient {
         }
     }
     
-    pub fn sync_rules(&mut self) -> Result<(), DragonflyError> {
-        let response = fetch_rules(&self.client)?;
-        
-        let rules_str = response.rules
-            .iter()
-            .map(|(_, v)| v.to_owned())
-            .collect::<Vec<String>>()
-            .join("\n");
-        
-        let compiler = Compiler::new()?
-            .add_rules_str(&rules_str)?;
-        let compiled_rules = compiler.compile_rules()?;
-
-        self.state.set_hash(response.hash);
-        self.state.set_rules(compiled_rules);
-
-        Ok(())
-    }
 
 
     pub fn get_job(&self) -> reqwest::Result<Option<Job>> {
@@ -164,5 +165,10 @@ impl DragonflyClient {
             .send()?;
 
         Ok(())
+    }
+
+    pub fn get_http_client(&self) -> &Client {
+        // Return a reference to the underlying HTTP Client
+        &self.client
     }
 }
