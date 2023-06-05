@@ -8,6 +8,7 @@ use api::{DragonflyClient, Job};
 use error::DragonflyError;
 use scanner::{scan_distribution, DistributionScanResults};
 use threadpool::ThreadPool;
+use tracing::{Level, info, span, error};
 
 use crate::api::SubmitJobResultsBody;
 
@@ -33,11 +34,9 @@ fn do_job(client: &DragonflyClient, job: Job) -> Result<(), DragonflyError> {
         let mut distribution_results: Vec<DistributionScanResults> = Vec::new();
 
         for download_url in job.distributions {
-            match scan_distribution(&client, &download_url) {
-                Ok(result) => distribution_results.push(result),
-                Err(DragonflyError::DownloadTooLarge(_)) => println!("Distribution {} is too large, skipping...", download_url),
-                Err(err) => println!("Error while scanning distribution {}: {:#?}, skipping...", download_url, err),
-            }
+            info!("Scanning distribution {}...", download_url);
+            let result = scan_distribution(&client, &download_url)?;
+            distribution_results.push(result);
         }
         
         let highest_score_distribution = distribution_results.iter().max_by_key(|distrib| distrib.get_total_score()).unwrap();
@@ -55,7 +54,7 @@ fn do_job(client: &DragonflyClient, job: Job) -> Result<(), DragonflyError> {
             None
         };
         
-        println!("Finished job {}@{}! Submitting results...", job.name, job.version);
+        info!("Finished scanning job! Sending results...");
         client.submit_job_results(SubmitJobResultsBody{ 
             name: &job.name,
             version: &job.version,
@@ -64,15 +63,18 @@ fn do_job(client: &DragonflyClient, job: Job) -> Result<(), DragonflyError> {
             rules_matched: &highest_score_distribution.get_all_rules(),
 
         })?;
+        info!("Successfully sent results for job");
 
         Ok(())
 }
 
 fn main() -> Result<(), DragonflyError> {
+    tracing_subscriber::fmt().init();
     let client = Arc::new(DragonflyClient::new()?);
     
     let n_jobs = 5;
     let pool = ThreadPool::new(n_jobs);
+    info!("Started threadpool with {} workers", n_jobs);
 
     for _ in 0..n_jobs {
         let client = Arc::clone(&client);
@@ -81,23 +83,28 @@ fn main() -> Result<(), DragonflyError> {
                 match client.get_job() {
                     Ok(response) => match response {
                         Some(job) => { 
-                            println!("Found job! Scanning {}@{}", job.name, job.version);
+                            let span = span!(Level::INFO, "Job", name=job.name, version=job.version);
+                            let _enter = span.enter();
+
+                            info!("Start job {}@{}", job.name, job.version);
                             {
                                 let mut state = client.state.lock().unwrap();
                                 if state.hash != job.hash {
+                                    info!("Local hash: {}, remote hash: {}", state.hash, job.hash);
+                                    info!("State is behind, syncing...");
                                     if let Err(err) = state.sync(client.get_http_client()) {
-                                        println!("Failed to sync rules: {:#?}", err);
+                                        error!("Failed to sync rules: {:#?}", err);
                                     }
                                 }
                             }
 
                             if let Err(err) = do_job(&client, job) {
-                                println!("Unexpected error occured: {:#?}", err)
+                                error!("Unexpected error occured: {:#?}", err);
                             }
 
                         },
                         None => {
-                            println!("No job found! Trying again in {WAIT_DURATION} seconds...");
+                            info!("No job found! Trying again in {} seconds...", WAIT_DURATION);
                             thread::sleep(Duration::from_secs(WAIT_DURATION));
                         }
                     }
