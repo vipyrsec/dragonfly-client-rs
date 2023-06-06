@@ -1,45 +1,43 @@
-use std::{io, sync::PoisonError};
+use std::io;
 
 use yara;
 use reqwest;
 use zip::result::ZipError;
+use thiserror::Error;
 
-#[derive(Debug)]
+#[derive(Error, Debug)]
 pub enum DragonflyError {
-    YaraError(yara::errors::Error),
-    HTTPError(reqwest::Error),
-    IOError(io::Error),
-    ZipError(ZipError),
-    UnsupportedDistributionType(String),
+
+    #[error("Yara Error: {source:#?}")]
+    YaraError{
+        #[from]
+        source: yara::YaraError
+    },
+
+    #[error("Yara Error: {source:#?}")]
+    GenericYaraError{
+        #[from]
+        source: yara::Error
+    },
+
+    #[error("HTTP Error: {source:#?}")]
+    HTTPError {
+        #[from]
+        source: reqwest::Error
+    },
+
+    #[error("IO Error: {source:#?}")]
+    IOError{
+        #[from]
+        source: io::Error
+    },
+
+    #[error("Zipfile Error: {source:#?}")]
+    ZipError {
+        #[from]
+        source: ZipError
+    },
+
+    #[error("Download too large: '{0:#?}'")]
     DownloadTooLarge(String),
-}
-
-impl From<yara::errors::Error> for DragonflyError {
-    fn from(value: yara::errors::Error) -> Self {
-        Self::YaraError(value)
-    }
-}
-
-impl From<yara::YaraError> for DragonflyError {
-    fn from(value: yara::YaraError) -> Self {
-        Self::YaraError(yara::errors::Error::Yara(value)) 
-    }
-}
-
-impl From<reqwest::Error> for DragonflyError {
-    fn from(value: reqwest::Error) -> Self {
-        Self::HTTPError(value)
-    }
-}
-
-impl From<io::Error> for DragonflyError {
-    fn from(value: io::Error) -> Self {
-        Self::IOError(value) 
-    } 
-}
-
-impl From<ZipError> for DragonflyError {
-    fn from(value: ZipError) -> Self {
-        Self::ZipError(value)
-    }
 }
