@@ -11,7 +11,7 @@ COPY .cargo/ .cargo/
 COPY Cargo.toml .
 COPY Cargo.lock .
 
-ARG dragonfly_base_url 
+ARG dragonfly_base_url=dragonfly.vipyrsec.com
 ENV DRAGONFLY_BASE_URL=$dragonfly_base_url
 
 RUN RUSTFLAGS='-L/usr/local/lib' cargo build --release
