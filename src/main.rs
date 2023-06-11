@@ -88,6 +88,10 @@ fn main() -> Result<(), DragonflyError> {
     let config: AppConfig = Config::builder()
         .add_source(config::File::with_name("Config.toml"))
         .add_source(config::Environment::with_prefix("DRAGONFLY_"))
+        .set_default("client_id", String::new())?
+        .set_default("client_secret", String::new())?
+        .set_default("username", String::new())?
+        .set_default("password", String::new())?
         .set_default("base_url", "https://dragonfly.vipyrsec.com")?
         .set_default("auth0_domain", "vipyrsec-dev.us.auth0.com")?
         .set_default("audience", "https://dragonfly.vipyrsec.local")?
