@@ -1,16 +1,20 @@
 mod api;
 mod error;
 mod scanner;
+mod api_models;
 
 use std::{path::Path, thread, time::Duration, sync::Arc};
 
-use api::{DragonflyClient, Job};
+use api::DragonflyClient;
+use api_models::Job;
+use config::Config;
 use error::DragonflyError;
 use scanner::{scan_distribution, DistributionScanResults};
 use threadpool::ThreadPool;
 use tracing::{Level, info, span, error};
+use serde::Deserialize;
 
-use crate::api::SubmitJobResultsBody;
+use crate::api_models::SubmitJobResultsBody;
 
 const WAIT_DURATION: u64 = 60;
 
@@ -55,7 +59,7 @@ fn do_job(client: &DragonflyClient, job: Job) -> Result<(), DragonflyError> {
         };
         
         info!("Finished scanning job! Sending results...");
-        client.submit_job_results(SubmitJobResultsBody{ 
+        client.submit_job_results(SubmitJobResultsBody { 
             name: &job.name,
             version: &job.version,
             score: if inspector_url.is_some() { Some(highest_score_distribution.get_total_score()) } else { None },
@@ -68,9 +72,31 @@ fn do_job(client: &DragonflyClient, job: Job) -> Result<(), DragonflyError> {
         Ok(())
 }
 
+#[derive(Deserialize)]
+pub struct AppConfig {
+    pub base_url: String,
+    pub auth0_domain: String,
+    pub client_id: String,
+    pub client_secret: String,
+    pub audience: String,
+    pub grant_type: String,
+    pub username: String,
+    pub password: String,
+}
+
 fn main() -> Result<(), DragonflyError> {
+    let config: AppConfig = Config::builder()
+        .add_source(config::File::with_name("Config.toml"))
+        .add_source(config::Environment::with_prefix("DRAGONFLY_"))
+        .set_default("base_url", "https://dragonfly.vipyrsec.com")?
+        .set_default("auth0_domain", "vipyrsec-dev.us.auth0.com")?
+        .set_default("audience", "https://dragonfly.vipyrsec.local")?
+        .set_default("grant_type", "password")?
+        .build()?
+        .try_deserialize()?;
+
     tracing_subscriber::fmt().init();
-    let client = Arc::new(DragonflyClient::new()?);
+    let client = Arc::new(DragonflyClient::new(config)?);
     
     let n_jobs = 5;
     let pool = ThreadPool::new(n_jobs);
@@ -92,8 +118,12 @@ fn main() -> Result<(), DragonflyError> {
                                 if state.hash != job.hash {
                                     info!("Local hash: {}, remote hash: {}", state.hash, job.hash);
                                     info!("State is behind, syncing...");
-                                    if let Err(err) = state.sync(client.get_http_client()) {
-                                        error!("Failed to sync rules: {:#?}", err);
+                                    match client.fetch_rules() {
+                                        Ok((hash, rules)) => {
+                                            state.set_hash(hash);
+                                            state.set_rules(rules);
+                                        },
+                                        Err(err) => error!("Failed to sync rules: {:#?}", err),
                                     }
                                 }
                             }
