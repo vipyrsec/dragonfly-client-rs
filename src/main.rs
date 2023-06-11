@@ -62,8 +62,8 @@ fn do_job(client: &DragonflyClient, job: Job) -> Result<(), DragonflyError> {
         client.submit_job_results(SubmitJobResultsBody { 
             name: &job.name,
             version: &job.version,
-            score: if inspector_url.is_some() { Some(highest_score_distribution.get_total_score()) } else { None },
-            inspector_url: inspector_url.as_ref(),
+            score: if inspector_url.is_some() { highest_score_distribution.get_total_score() } else { 0 },
+            inspector_url: inspector_url.as_deref(),
             rules_matched: &highest_score_distribution.get_all_rules(),
 
         })?;

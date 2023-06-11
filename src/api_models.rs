@@ -6,9 +6,9 @@ use serde::Serialize;
 pub struct SubmitJobResultsBody<'a> {
     pub name: &'a String,
     pub version: &'a String,
-    pub score: Option<i64>,
-    pub inspector_url: Option<&'a String>,
-    pub rules_matched: &'a HashSet<&'a String>,
+    pub score: i64,
+    pub inspector_url: Option<&'a str>,
+    pub rules_matched: &'a HashSet<&'a str>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -25,6 +25,7 @@ pub enum GetJobResponse {
     Job(Job),
     Error { detail: String },
 }
+
 
 #[derive(Debug, Deserialize)]
 pub struct GetRulesResponse {
