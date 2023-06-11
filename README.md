@@ -14,6 +14,12 @@ Requirements
 - [yara](https://yara.readthedocs.io/en/stable/gettingstarted.html#compiling-and-installing-yara)
 - [git](https://git-scm.com/book/en/v2/Getting-Started-Installing-Git)
 
+
+Set the appropriate environment variable pointing to the yara installation:
+```
+export RUSTFLAGS='-L/path/to/yara'
+```
+
 Clone the repository and change directory into it:
 ```
 git clone https://github.com/vipyrsec/dragonfly-rs.git
