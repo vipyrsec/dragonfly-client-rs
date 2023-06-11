@@ -16,8 +16,6 @@ use serde::Deserialize;
 
 use crate::api_models::SubmitJobResultsBody;
 
-const WAIT_DURATION: u64 = 60;
-
 fn create_inspector_url(name: &String, version: &String, download_url: &String, path: &Path) -> String {
     let mut url = reqwest::Url::parse(download_url).unwrap();
     let new_path = format!(
@@ -75,6 +73,7 @@ fn do_job(client: &DragonflyClient, job: Job) -> Result<(), DragonflyError> {
 #[derive(Deserialize)]
 pub struct AppConfig {
     pub base_url: String,
+    pub wait_duration: u64,
     pub auth0_domain: String,
     pub client_id: String,
     pub client_secret: String,
@@ -92,6 +91,7 @@ fn main() -> Result<(), DragonflyError> {
         .set_default("auth0_domain", "vipyrsec-dev.us.auth0.com")?
         .set_default("audience", "https://dragonfly.vipyrsec.local")?
         .set_default("grant_type", "password")?
+        .set_default("wait_duration", 60u64)?
         .build()?
         .try_deserialize()?;
 
@@ -134,8 +134,8 @@ fn main() -> Result<(), DragonflyError> {
 
                         },
                         None => {
-                            info!("No job found! Trying again in {} seconds...", WAIT_DURATION);
-                            thread::sleep(Duration::from_secs(WAIT_DURATION));
+                            info!("No job found! Trying again in {} seconds...", client.config.wait_duration);
+                            thread::sleep(Duration::from_secs(client.config.wait_duration));
                         }
                     }
                     Err(err) => println!("Unexpected HTTP error: {:#?}", err),
