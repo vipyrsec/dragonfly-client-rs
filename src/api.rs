@@ -1,14 +1,22 @@
-use std::{io::{Read, Cursor}, sync::Mutex};
+use std::{
+    io::{Cursor, Read},
+    sync::Mutex,
+};
 
 use flate2::read::GzDecoder;
 use reqwest::blocking::Client;
 use yara::{Compiler, Rules};
 use zip::ZipArchive;
 
-use crate::{error::DragonflyError, api_models::{GetRulesResponse, Job, GetJobResponse, SubmitJobResultsBody, AuthBody, AuthResponse}, AppConfig};
+use crate::{
+    api_models::{
+        AuthBody, AuthResponse, GetJobResponse, GetRulesResponse, Job, SubmitJobResultsBody,
+    },
+    error::DragonflyError,
+    AppConfig,
+};
 
 const MAX_SIZE: usize = 250000000;
-
 
 pub struct State {
     pub rules: yara::Rules,
@@ -22,20 +30,25 @@ pub struct DragonflyClient {
     pub state: Mutex<State>,
 }
 
-fn fetch_rules(client: &Client, base_url: &str, access_token: &str) -> Result<(String, Rules), DragonflyError> {
-    let res: GetRulesResponse = client.get(format!("{base_url}/rules"))
+fn fetch_rules(
+    client: &Client,
+    base_url: &str,
+    access_token: &str,
+) -> Result<(String, Rules), DragonflyError> {
+    let res: GetRulesResponse = client
+        .get(format!("{base_url}/rules"))
         .header("Authorization", format!("Bearer {access_token}"))
         .send()?
         .json()?;
-    
-    let rules_str = res.rules
+
+    let rules_str = res
+        .rules
         .iter()
         .map(|(_, v)| v.to_owned())
         .collect::<Vec<String>>()
         .join("\n");
-    
-    let compiler = Compiler::new()?
-        .add_rules_str(&rules_str)?;
+
+    let compiler = Compiler::new()?.add_rules_str(&rules_str)?;
     let compiled_rules = compiler.compile_rules()?;
 
     Ok((res.hash, compiled_rules))
@@ -43,7 +56,11 @@ fn fetch_rules(client: &Client, base_url: &str, access_token: &str) -> Result<(S
 
 impl State {
     pub fn new(rules: yara::Rules, hash: String, access_token: String) -> Self {
-        Self { rules, hash, access_token }
+        Self {
+            rules,
+            hash,
+            access_token,
+        }
     }
 
     pub fn set_hash(&mut self, hash: String) {
@@ -66,31 +83,30 @@ fn authorize(http_client: &Client, config: &AppConfig) -> Result<AuthResponse, r
         password: &config.password,
     };
 
-    http_client.post(url)
-        .json(&json_body)
-        .send()?
-        .json()
+    http_client.post(url).json(&json_body).send()?.json()
 }
 
 impl DragonflyClient {
     pub fn new(config: AppConfig) -> Result<Self, DragonflyError> {
         let client = Client::builder().gzip(true).build()?;
-        
+
         let access_token = authorize(&client, &config)?.access_token;
         let (hash, rules) = fetch_rules(&client, &config.base_url, &access_token)?;
-        
+
         let state: Mutex<State> = State::new(rules, hash, access_token).into();
 
-        Ok(Self { 
+        Ok(Self {
             config,
-            client, 
+            client,
             state,
         })
     }
 
-    pub fn fetch_tarball(&self, download_url: &String) -> Result<tar::Archive<Cursor<Vec<u8>>>, DragonflyError> {
-        let response = self.client.get(download_url)
-            .send()?;
+    pub fn fetch_tarball(
+        &self,
+        download_url: &String,
+    ) -> Result<tar::Archive<Cursor<Vec<u8>>>, DragonflyError> {
+        let response = self.client.get(download_url).send()?;
 
         let mut decompressed = GzDecoder::new(response);
         let mut cursor: Cursor<Vec<u8>> = Cursor::new(Vec::new());
@@ -105,12 +121,18 @@ impl DragonflyClient {
 
     pub fn fetch_rules(&self) -> Result<(String, Rules), DragonflyError> {
         let state = self.state.lock().unwrap();
-        fetch_rules(&self.get_http_client(), &self.config.base_url, &state.access_token)
+        fetch_rules(
+            &self.get_http_client(),
+            &self.config.base_url,
+            &state.access_token,
+        )
     }
 
-    pub fn fetch_zipfile(&self, download_url: &String) -> Result<ZipArchive<Cursor<Vec<u8>>>, DragonflyError> {
-        let mut response = self.client.get(download_url)
-            .send()?;
+    pub fn fetch_zipfile(
+        &self,
+        download_url: &String,
+    ) -> Result<ZipArchive<Cursor<Vec<u8>>>, DragonflyError> {
+        let mut response = self.client.get(download_url).send()?;
 
         let mut cursor = Cursor::new(Vec::new());
         let read = response.read_to_end(cursor.get_mut())?;
@@ -122,19 +144,19 @@ impl DragonflyClient {
             Ok(zip)
         }
     }
-    
-
 
     pub fn get_job(&self) -> reqwest::Result<Option<Job>> {
         let access_token = &self.state.lock().unwrap().access_token;
-        let res: GetJobResponse = self.client.post(format!("{}/job", self.config.base_url))
+        let res: GetJobResponse = self
+            .client
+            .post(format!("{}/job", self.config.base_url))
             .header("Authorization", format!("Bearer {access_token}"))
             .send()?
             .json()?;
-        
+
         let job = match res {
             GetJobResponse::Job(job) => Some(job),
-            GetJobResponse::Error {..} => None,
+            GetJobResponse::Error { .. } => None,
         };
 
         Ok(job)
@@ -142,7 +164,8 @@ impl DragonflyClient {
 
     pub fn submit_job_results(&self, body: SubmitJobResultsBody) -> reqwest::Result<()> {
         let access_token = &self.state.lock().unwrap().access_token;
-        self.client.put(format!("{}/package", self.config.base_url))
+        self.client
+            .put(format!("{}/package", self.config.base_url))
             .header("Authorization", format!("Bearer {access_token}"))
             .json(&body)
             .send()?;

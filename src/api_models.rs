@@ -1,6 +1,6 @@
-use std::collections::{HashSet, HashMap};
-use serde::{self, Deserialize};
 use serde::Serialize;
+use serde::{self, Deserialize};
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Serialize)]
 pub struct SubmitJobResultsBody<'a> {
@@ -25,7 +25,6 @@ pub enum GetJobResponse {
     Job(Job),
     Error { detail: String },
 }
-
 
 #[derive(Debug, Deserialize)]
 pub struct GetRulesResponse {

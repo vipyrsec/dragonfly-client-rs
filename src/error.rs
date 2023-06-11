@@ -1,48 +1,47 @@
 use std::io;
 
 use config::ConfigError;
-use yara;
 use reqwest;
-use zip::result::ZipError;
 use thiserror::Error;
+use yara;
+use zip::result::ZipError;
 
 #[derive(Error, Debug)]
 pub enum DragonflyError {
-
     #[error("Yara Error: {source:#?}")]
-    YaraError{
+    YaraError {
         #[from]
-        source: yara::YaraError
+        source: yara::YaraError,
     },
 
     #[error("Yara Error: {source:#?}")]
-    GenericYaraError{
+    GenericYaraError {
         #[from]
-        source: yara::Error
+        source: yara::Error,
     },
 
     #[error("HTTP Error: {source:#?}")]
     HTTPError {
         #[from]
-        source: reqwest::Error
+        source: reqwest::Error,
     },
 
     #[error("IO Error: {source:#?}")]
-    IOError{
+    IOError {
         #[from]
-        source: io::Error
+        source: io::Error,
     },
 
     #[error("Zipfile Error: {source:#?}")]
     ZipError {
         #[from]
-        source: ZipError
+        source: ZipError,
     },
 
     #[error("Configuration Error: {source:#?}")]
     ConfigError {
         #[from]
-        source: ConfigError 
+        source: ConfigError,
     },
     #[error("Download too large: '{0:#?}'")]
     DownloadTooLarge(String),
