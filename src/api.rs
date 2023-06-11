@@ -56,7 +56,7 @@ impl State {
 }
 
 fn authorize(http_client: &Client, config: &AppConfig) -> Result<AuthResponse, reqwest::Error> {
-    let url = format!("https://{}/oauth/token", config.auth0_domain) ;
+    let url = format!("https://{}/oauth/token", config.auth0_domain);
     let json_body = AuthBody {
         client_id: &config.client_id,
         client_secret: &config.client_secret,
