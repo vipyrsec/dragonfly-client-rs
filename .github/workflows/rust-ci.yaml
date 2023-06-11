@@ -1,0 +1,38 @@
+name: "Rust CI"
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  lint:
+    uses: darbiadev/.github/.github/workflows/rust-lint.yaml@44a991d8ab123fbc370aa7aaae25907f38f4fc1b
+
+  clippy:
+    needs: lint
+    uses: darbiadev/.github/.github/workflows/rust-clippy.yaml@44a991d8ab123fbc370aa7aaae25907f38f4fc1b
+
+  test:
+    needs: clippy
+    strategy:
+      matrix:
+        triple:
+          - {
+            os: "ubuntu-latest",
+            target: "x86_64-unknown-linux-gnu",
+          }
+          - {
+            os: "macOS-latest",
+            target: "x86_64-apple-darwin",
+          }
+          - {
+            os: "windows-latest",
+            target: "x86_64-pc-windows-msvc",
+          }
+
+    uses: darbiadev/.github/.github/workflows/rust-test.yaml@44a991d8ab123fbc370aa7aaae25907f38f4fc1b
+    with:
+      os: ${{ matrix.triple.os }}
+      target: ${{ matrix.triple.target }}
