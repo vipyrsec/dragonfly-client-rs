@@ -26,6 +26,7 @@ fn fetch_rules(client: &Client, base_url: &str, access_token: &str) -> Result<(S
     let res: GetRulesResponse = client.get(format!("{base_url}/rules"))
         .header("Authorization", format!("Bearer {access_token}"))
         .send()?
+        .error_for_status()?
         .json()?;
     
     let rules_str = res.rules
@@ -77,7 +78,6 @@ impl DragonflyClient {
         let client = Client::builder().gzip(true).build()?;
         
         let access_token = authorize(&client, &config)?.access_token;
-        println!("ACCESS TOKEN: {access_token}");
         let (hash, rules) = fetch_rules(&client, &config.base_url, &access_token)?;
         
         let state: Mutex<State> = State::new(rules, hash, access_token).into();
@@ -131,6 +131,7 @@ impl DragonflyClient {
         let res: GetJobResponse = self.client.post(format!("{}/job", self.config.base_url))
             .header("Authorization", format!("Bearer {access_token}"))
             .send()?
+            .error_for_status()?
             .json()?;
         
         let job = match res {
@@ -146,7 +147,8 @@ impl DragonflyClient {
         self.client.put(format!("{}/package", self.config.base_url))
             .header("Authorization", format!("Bearer {access_token}"))
             .json(&body)
-            .send()?;
+            .send()?
+            .error_for_status()?;
 
         Ok(())
     }
