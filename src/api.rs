@@ -77,7 +77,6 @@ impl DragonflyClient {
         let client = Client::builder().gzip(true).build()?;
         
         let access_token = authorize(&client, &config)?.access_token;
-        println!("ACCESS TOKEN: {access_token}");
         let (hash, rules) = fetch_rules(&client, &config.base_url, &access_token)?;
         
         let state: Mutex<State> = State::new(rules, hash, access_token).into();
