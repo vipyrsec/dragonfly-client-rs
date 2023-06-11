@@ -1,65 +1,49 @@
-use std::{collections::{HashMap, HashSet}, io::{Read, Cursor}, sync::Mutex};
+use std::{io::{Read, Cursor}, sync::Mutex};
 
 use flate2::read::GzDecoder;
 use reqwest::blocking::Client;
-use serde::{Serialize, Deserialize};
-use yara::Compiler;
+use yara::{Compiler, Rules};
 use zip::ZipArchive;
 
-use crate::error::DragonflyError;
+use crate::{error::DragonflyError, api_models::{GetRulesResponse, Job, GetJobResponse, SubmitJobResultsBody, AuthBody, AuthResponse}, AppConfig};
 
-const BASE_URL: &'static str = env!("DRAGONFLY_BASE_URL");
 const MAX_SIZE: usize = 250000000;
 
-#[derive(Debug, Serialize)]
-pub struct SubmitJobResultsBody<'a> {
-    pub name: &'a String,
-    pub version: &'a String,
-    pub score: Option<i64>,
-    pub inspector_url: Option<&'a String>,
-    pub rules_matched: &'a HashSet<&'a String>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct Job {
-    pub hash: String,
-    pub name: String,
-    pub version: String,
-    pub distributions: Vec<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
-enum GetJobResponse {
-    Job(Job),
-    Error { detail: String },
-}
-
-#[derive(Debug, Deserialize)]
-pub struct GetRulesResponse {
-    hash: String,
-    rules: HashMap<String, String>,
-}
 
 pub struct State {
     pub rules: yara::Rules,
     pub hash: String,
+    pub access_token: String,
 }
 
 pub struct DragonflyClient {
+    pub config: AppConfig,
     pub client: Client,
     pub state: Mutex<State>,
 }
 
-fn fetch_rules(client: &Client) -> Result<GetRulesResponse, reqwest::Error> {
-    client.get(format!("{BASE_URL}/rules"))
+fn fetch_rules(client: &Client, base_url: &str, access_token: &str) -> Result<(String, Rules), DragonflyError> {
+    let res: GetRulesResponse = client.get(format!("{base_url}/rules"))
+        .header("Authorization", format!("Bearer {access_token}"))
         .send()?
-        .json()
+        .json()?;
+    
+    let rules_str = res.rules
+        .iter()
+        .map(|(_, v)| v.to_owned())
+        .collect::<Vec<String>>()
+        .join("\n");
+    
+    let compiler = Compiler::new()?
+        .add_rules_str(&rules_str)?;
+    let compiled_rules = compiler.compile_rules()?;
+
+    Ok((res.hash, compiled_rules))
 }
 
 impl State {
-    pub fn new(rules: yara::Rules, hash: String) -> Self {
-        Self { rules, hash }
+    pub fn new(rules: yara::Rules, hash: String, access_token: String) -> Self {
+        Self { rules, hash, access_token }
     }
 
     pub fn set_hash(&mut self, hash: String) {
@@ -69,46 +53,37 @@ impl State {
     pub fn set_rules(&mut self, rules: yara::Rules) {
         self.rules = rules;
     }
+}
 
-    pub fn sync(&mut self, http_client: &Client) -> Result<(), DragonflyError> {
-        let response = fetch_rules(http_client)?;
-        
-        let rules_str = response.rules
-            .iter()
-            .map(|(_, v)| v.to_owned())
-            .collect::<Vec<String>>()
-            .join("\n");
-        
-        let compiler = Compiler::new()?
-            .add_rules_str(&rules_str)?;
-        let compiled_rules = compiler.compile_rules()?;
-        
-        self.set_hash(response.hash);
-        self.set_rules(compiled_rules);
+fn authorize(http_client: &Client, config: &AppConfig) -> Result<AuthResponse, reqwest::Error> {
+    let url = format!("https://{}/oauth/token", config.auth0_domain) ;
+    let json_body = AuthBody {
+        client_id: &config.client_id,
+        client_secret: &config.client_secret,
+        audience: &config.audience,
+        grant_type: &config.grant_type,
+        username: &config.username,
+        password: &config.password,
+    };
 
-        Ok(())
-    }
+    http_client.post(url)
+        .json(&json_body)
+        .send()?
+        .json()
 }
 
 impl DragonflyClient {
-    pub fn new() -> Result<Self, DragonflyError> {
+    pub fn new(config: AppConfig) -> Result<Self, DragonflyError> {
         let client = Client::builder().gzip(true).build()?;
-
-        let response = fetch_rules(&client)?;
-        let hash = response.hash;
-        let rules_str = response.rules
-            .into_iter()
-            .map(|(_, v)| v)
-            .collect::<Vec<String>>()
-            .join("\n");
-
-        let compiler = Compiler::new()?
-            .add_rules_str(&rules_str)?;
-        let rules = compiler.compile_rules()?;
         
-        let state: Mutex<State> = State::new(rules, hash).into();
+        let access_token = authorize(&client, &config)?.access_token;
+        println!("ACCESS TOKEN: {access_token}");
+        let (hash, rules) = fetch_rules(&client, &config.base_url, &access_token)?;
+        
+        let state: Mutex<State> = State::new(rules, hash, access_token).into();
 
         Ok(Self { 
+            config,
             client, 
             state,
         })
@@ -129,6 +104,11 @@ impl DragonflyClient {
         }
     }
 
+    pub fn fetch_rules(&self) -> Result<(String, Rules), DragonflyError> {
+        let state = self.state.lock().unwrap();
+        fetch_rules(&self.get_http_client(), &self.config.base_url, &state.access_token)
+    }
+
     pub fn fetch_zipfile(&self, download_url: &String) -> Result<ZipArchive<Cursor<Vec<u8>>>, DragonflyError> {
         let mut response = self.client.get(download_url)
             .send()?;
@@ -147,7 +127,9 @@ impl DragonflyClient {
 
 
     pub fn get_job(&self) -> reqwest::Result<Option<Job>> {
-        let res: GetJobResponse = self.client.post(format!("{BASE_URL}/job"))
+        let access_token = &self.state.lock().unwrap().access_token;
+        let res: GetJobResponse = self.client.post(format!("{}/job", self.config.base_url))
+            .header("Authorization", format!("Bearer {access_token}"))
             .send()?
             .json()?;
         
@@ -160,7 +142,9 @@ impl DragonflyClient {
     }
 
     pub fn submit_job_results(&self, body: SubmitJobResultsBody) -> reqwest::Result<()> {
-        self.client.put(format!("{BASE_URL}/package"))
+        let access_token = &self.state.lock().unwrap().access_token;
+        self.client.put(format!("{}/package", self.config.base_url))
+            .header("Authorization", format!("Bearer {access_token}"))
             .json(&body)
             .send()?;
 
