@@ -7,6 +7,7 @@ use std::{path::Path, sync::Arc, thread, time::Duration};
 
 use api::DragonflyClient;
 use api_models::Job;
+use chrono::{DateTime, Local};
 use config::Config;
 use error::DragonflyError;
 use scanner::{scan_distribution, DistributionScanResults};
@@ -117,6 +118,14 @@ fn main() -> Result<(), DragonflyError> {
     for _ in 0..n_jobs {
         let client = Arc::clone(&client);
         pool.execute(move || loop {
+            let state = { client.state.lock().unwrap() };
+            if Local::now() > state.authentication_information.expires_at {
+                if let Err(err) = client.reauthorize() {
+                    error!("Error while trying to reauthorize: {err:#?}");
+                    continue;
+                }
+            }
+
             match client.get_job() {
                 Ok(response) => match response {
                     Some(job) => {

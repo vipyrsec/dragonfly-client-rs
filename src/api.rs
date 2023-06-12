@@ -3,6 +3,7 @@ use std::{
     sync::Mutex,
 };
 
+use chrono::{DateTime, Local, Duration};
 use flate2::read::GzDecoder;
 use reqwest::blocking::Client;
 use yara::{Compiler, Rules};
@@ -18,10 +19,15 @@ use crate::{
 
 const MAX_SIZE: usize = 250000000;
 
+pub struct AuthenticationInformation {
+    pub access_token: String,
+    pub expires_at: DateTime<Local>,
+}
+
 pub struct State {
     pub rules: yara::Rules,
     pub hash: String,
-    pub access_token: String,
+    pub authentication_information: AuthenticationInformation,
 }
 
 pub struct DragonflyClient {
@@ -55,11 +61,11 @@ fn fetch_rules(
 }
 
 impl State {
-    pub fn new(rules: yara::Rules, hash: String, access_token: String) -> Self {
+    pub fn new(rules: yara::Rules, hash: String, authentication_information: AuthenticationInformation) -> Self {
         Self {
             rules,
             hash,
-            access_token,
+            authentication_information,
         }
     }
 
@@ -72,7 +78,7 @@ impl State {
     }
 }
 
-fn authorize(http_client: &Client, config: &AppConfig) -> Result<AuthResponse, reqwest::Error> {
+fn authorize(http_client: &Client, config: &AppConfig) -> Result<AuthenticationInformation, reqwest::Error> {
     let url = format!("https://{}/oauth/token", config.auth0_domain);
     let json_body = AuthBody {
         client_id: &config.client_id,
@@ -83,23 +89,35 @@ fn authorize(http_client: &Client, config: &AppConfig) -> Result<AuthResponse, r
         password: &config.password,
     };
 
-    http_client.post(url).json(&json_body).send()?.json()
+    let res: AuthResponse = http_client.post(url).json(&json_body).send()?.json()?;
+    let access_token = res.access_token;
+    let expires_at = Local::now() + Duration::seconds(res.expires_in as i64);
+
+    Ok(AuthenticationInformation { access_token, expires_at })
 }
 
 impl DragonflyClient {
     pub fn new(config: AppConfig) -> Result<Self, DragonflyError> {
         let client = Client::builder().gzip(true).build()?;
 
-        let access_token = authorize(&client, &config)?.access_token;
-        let (hash, rules) = fetch_rules(&client, &config.base_url, &access_token)?;
-
-        let state: Mutex<State> = State::new(rules, hash, access_token).into();
+        let auth_info = authorize(&client, &config)?;
+        let (hash, rules) = fetch_rules(&client, &config.base_url, &auth_info.access_token)?;
+        let state: Mutex<State> = State::new(rules, hash, auth_info).into();
 
         Ok(Self {
             config,
             client,
             state,
         })
+    }
+
+    pub fn reauthorize(&self) -> Result<(), reqwest::Error> {
+        let auth_info = authorize(self.get_http_client(), &self.config)?;
+        let mut state = self.state.lock().unwrap();
+
+        state.authentication_information = auth_info;
+
+        Ok(())
     }
 
     pub fn fetch_tarball(
@@ -124,7 +142,7 @@ impl DragonflyClient {
         fetch_rules(
             &self.get_http_client(),
             &self.config.base_url,
-            &state.access_token,
+            &state.authentication_information.access_token,
         )
     }
 
@@ -146,7 +164,7 @@ impl DragonflyClient {
     }
 
     pub fn get_job(&self) -> reqwest::Result<Option<Job>> {
-        let access_token = &self.state.lock().unwrap().access_token;
+        let access_token = &self.state.lock().unwrap().authentication_information.access_token;
         let res: GetJobResponse = self
             .client
             .post(format!("{}/job", self.config.base_url))
@@ -163,7 +181,7 @@ impl DragonflyClient {
     }
 
     pub fn submit_job_results(&self, body: SubmitJobResultsBody) -> reqwest::Result<()> {
-        let access_token = &self.state.lock().unwrap().access_token;
+        let access_token = &self.state.lock().unwrap().authentication_information.access_token;
         self.client
             .put(format!("{}/package", self.config.base_url))
             .header("Authorization", format!("Bearer {access_token}"))
