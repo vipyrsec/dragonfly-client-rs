@@ -4,8 +4,8 @@ use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Serialize)]
 pub struct SubmitJobResultsBody<'a> {
-    pub name: &'a String,
-    pub version: &'a String,
+    pub name: &'a str,
+    pub version: &'a str,
     pub score: i64,
     pub inspector_url: Option<&'a str>,
     pub rules_matched: &'a HashSet<&'a str>,
