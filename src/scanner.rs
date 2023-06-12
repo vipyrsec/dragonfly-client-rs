@@ -4,7 +4,6 @@ use std::{
     path::PathBuf,
 };
 
-use tar;
 use yara::{MetadataValue, Rule, Rules};
 use zip::ZipArchive;
 
@@ -77,7 +76,7 @@ pub fn scan_distribution(
         let rules = { &client.state.lock().unwrap().rules };
         scan_tarball(&mut tar, download_url, rules)
     } else {
-        let mut zip = client.fetch_zipfile(&download_url)?;
+        let mut zip = client.fetch_zipfile(download_url)?;
         let rules = { &client.state.lock().unwrap().rules };
         scan_zipfile(&mut zip, download_url, rules)
     }
@@ -101,11 +100,14 @@ fn get_rule_score(rule: &Rule) -> Option<i64> {
 
 pub fn scan_zipfile(
     zip: &mut ZipArchive<Cursor<Vec<u8>>>,
-    download_url: &String,
+    download_url: &str,
     rules: &Rules,
 ) -> Result<DistributionScanResults, DragonflyError> {
     let mut file_scan_results: Vec<FileScanResult> = Vec::new();
-    let file_names: Vec<String> = zip.file_names().map(|name| name.to_owned()).collect();
+    let file_names: Vec<String> = zip
+        .file_names()
+        .map(std::borrow::ToOwned::to_owned)
+        .collect();
     for file_name in file_names {
         let mut file = zip.by_name(&file_name)?;
         let mut buffer = Vec::new();
@@ -127,13 +129,13 @@ pub fn scan_zipfile(
 
     Ok(DistributionScanResults {
         file_scan_results,
-        download_url: download_url.to_owned(),
+        download_url: download_url.to_string(),
     })
 }
 
 pub fn scan_tarball(
     tar: &mut tar::Archive<Cursor<Vec<u8>>>,
-    download_url: &String,
+    download_url: &str,
     rules: &Rules,
 ) -> Result<DistributionScanResults, DragonflyError> {
     let mut file_scan_results: Vec<FileScanResult> = Vec::new();
@@ -160,6 +162,6 @@ pub fn scan_tarball(
 
     Ok(DistributionScanResults {
         file_scan_results,
-        download_url: download_url.to_owned(),
+        download_url: download_url.to_string(),
     })
 }

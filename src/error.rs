@@ -1,9 +1,7 @@
 use std::io;
 
 use config::ConfigError;
-use reqwest;
 use thiserror::Error;
-use yara;
 use zip::result::ZipError;
 
 #[derive(Error, Debug)]

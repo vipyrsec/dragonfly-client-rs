@@ -17,7 +17,7 @@ use crate::{
     AppConfig,
 };
 
-const MAX_SIZE: usize = 250000000;
+const MAX_SIZE: usize = 250_000_000;
 
 pub struct AuthenticationInformation {
     pub access_token: String,
@@ -49,8 +49,8 @@ fn fetch_rules(
 
     let rules_str = res
         .rules
-        .iter()
-        .map(|(_, v)| v.to_owned())
+        .values()
+        .cloned()
         .collect::<Vec<String>>()
         .join("\n");
 
@@ -98,7 +98,7 @@ fn authorize(
 
     let res: AuthResponse = http_client.post(url).json(&json_body).send()?.json()?;
     let access_token = res.access_token;
-    let expires_at = Local::now() + Duration::seconds(res.expires_in as i64);
+    let expires_at = Local::now() + Duration::seconds(i64::from(res.expires_in));
 
     Ok(AuthenticationInformation {
         access_token,
@@ -141,7 +141,7 @@ impl DragonflyClient {
         let read = decompressed.read_to_end(cursor.get_mut())?;
 
         if read > MAX_SIZE {
-            Err(DragonflyError::DownloadTooLarge(download_url.to_owned()))
+            Err(DragonflyError::DownloadTooLarge(download_url.clone()))
         } else {
             Ok(tar::Archive::new(cursor))
         }
@@ -150,7 +150,7 @@ impl DragonflyClient {
     pub fn fetch_rules(&self) -> Result<(String, Rules), DragonflyError> {
         let state = self.state.lock().unwrap();
         fetch_rules(
-            &self.get_http_client(),
+            self.get_http_client(),
             &self.config.base_url,
             &state.authentication_information.access_token,
         )
@@ -166,7 +166,7 @@ impl DragonflyClient {
         let read = response.read_to_end(cursor.get_mut())?;
 
         if read > MAX_SIZE {
-            Err(DragonflyError::DownloadTooLarge(download_url.to_owned()))
+            Err(DragonflyError::DownloadTooLarge(download_url.clone()))
         } else {
             let zip = ZipArchive::new(cursor)?;
             Ok(zip)
@@ -195,7 +195,7 @@ impl DragonflyClient {
         Ok(job)
     }
 
-    pub fn submit_job_results(&self, body: SubmitJobResultsBody) -> reqwest::Result<()> {
+    pub fn submit_job_results(&self, body: &SubmitJobResultsBody) -> reqwest::Result<()> {
         let access_token = &self
             .state
             .lock()

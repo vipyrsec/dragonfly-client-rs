@@ -7,7 +7,7 @@ use std::{path::Path, sync::Arc, thread, time::Duration};
 
 use api::DragonflyClient;
 use api_models::Job;
-use chrono::{DateTime, Local};
+use chrono::Local;
 use config::Config;
 use error::DragonflyError;
 use scanner::{scan_distribution, DistributionScanResults};
@@ -17,18 +17,13 @@ use tracing::{error, info, span, Level};
 
 use crate::api_models::SubmitJobResultsBody;
 
-fn create_inspector_url(
-    name: &String,
-    version: &String,
-    download_url: &String,
-    path: &Path,
-) -> String {
+fn create_inspector_url(name: &str, version: &str, download_url: &str, path: &Path) -> String {
     let mut url = reqwest::Url::parse(download_url).unwrap();
     let new_path = format!(
         "project/{}/{}/{}/{}",
         name,
         version,
-        url.path().strip_prefix("/").unwrap(),
+        url.path().strip_prefix('/').unwrap(),
         path.display()
     );
 
@@ -43,7 +38,7 @@ fn do_job(client: &DragonflyClient, job: Job) -> Result<(), DragonflyError> {
 
     for download_url in job.distributions {
         info!("Scanning distribution {}...", download_url);
-        let result = scan_distribution(&client, &download_url)?;
+        let result = scan_distribution(client, &download_url)?;
         distribution_results.push(result);
     }
 
@@ -67,7 +62,7 @@ fn do_job(client: &DragonflyClient, job: Job) -> Result<(), DragonflyError> {
         };
 
     info!("Finished scanning job! Sending results...");
-    client.submit_job_results(SubmitJobResultsBody {
+    client.submit_job_results(&SubmitJobResultsBody {
         name: &job.name,
         version: &job.version,
         score: if inspector_url.is_some() {
@@ -127,8 +122,8 @@ fn main() -> Result<(), DragonflyError> {
             }
 
             match client.get_job() {
-                Ok(response) => match response {
-                    Some(job) => {
+                Ok(response) => {
+                    if let Some(job) = response {
                         let span =
                             span!(Level::INFO, "Job", name = job.name, version = job.version);
                         let _enter = span.enter();
@@ -152,16 +147,15 @@ fn main() -> Result<(), DragonflyError> {
                         if let Err(err) = do_job(&client, job) {
                             error!("Unexpected error occured: {:#?}", err);
                         }
-                    }
-                    None => {
+                    } else {
                         info!(
                             "No job found! Trying again in {} seconds...",
                             client.config.wait_duration
                         );
                         thread::sleep(Duration::from_secs(client.config.wait_duration));
                     }
-                },
-                Err(err) => println!("Unexpected HTTP error: {:#?}", err),
+                }
+                Err(err) => error!("Unexpected HTTP error: {err:#?}"),
             }
         });
     }
