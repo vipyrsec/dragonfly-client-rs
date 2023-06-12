@@ -3,7 +3,7 @@ use std::{
     sync::Mutex,
 };
 
-use chrono::{DateTime, Local, Duration};
+use chrono::{DateTime, Duration, Local};
 use flate2::read::GzDecoder;
 use reqwest::blocking::Client;
 use yara::{Compiler, Rules};
@@ -61,7 +61,11 @@ fn fetch_rules(
 }
 
 impl State {
-    pub fn new(rules: yara::Rules, hash: String, authentication_information: AuthenticationInformation) -> Self {
+    pub fn new(
+        rules: yara::Rules,
+        hash: String,
+        authentication_information: AuthenticationInformation,
+    ) -> Self {
         Self {
             rules,
             hash,
@@ -78,7 +82,10 @@ impl State {
     }
 }
 
-fn authorize(http_client: &Client, config: &AppConfig) -> Result<AuthenticationInformation, reqwest::Error> {
+fn authorize(
+    http_client: &Client,
+    config: &AppConfig,
+) -> Result<AuthenticationInformation, reqwest::Error> {
     let url = format!("https://{}/oauth/token", config.auth0_domain);
     let json_body = AuthBody {
         client_id: &config.client_id,
@@ -93,7 +100,10 @@ fn authorize(http_client: &Client, config: &AppConfig) -> Result<AuthenticationI
     let access_token = res.access_token;
     let expires_at = Local::now() + Duration::seconds(res.expires_in as i64);
 
-    Ok(AuthenticationInformation { access_token, expires_at })
+    Ok(AuthenticationInformation {
+        access_token,
+        expires_at,
+    })
 }
 
 impl DragonflyClient {
@@ -164,7 +174,12 @@ impl DragonflyClient {
     }
 
     pub fn get_job(&self) -> reqwest::Result<Option<Job>> {
-        let access_token = &self.state.lock().unwrap().authentication_information.access_token;
+        let access_token = &self
+            .state
+            .lock()
+            .unwrap()
+            .authentication_information
+            .access_token;
         let res: GetJobResponse = self
             .client
             .post(format!("{}/job", self.config.base_url))
@@ -181,7 +196,12 @@ impl DragonflyClient {
     }
 
     pub fn submit_job_results(&self, body: SubmitJobResultsBody) -> reqwest::Result<()> {
-        let access_token = &self.state.lock().unwrap().authentication_information.access_token;
+        let access_token = &self
+            .state
+            .lock()
+            .unwrap()
+            .authentication_information
+            .access_token;
         self.client
             .put(format!("{}/package", self.config.base_url))
             .header("Authorization", format!("Bearer {access_token}"))
