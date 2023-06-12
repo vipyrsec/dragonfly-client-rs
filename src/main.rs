@@ -81,6 +81,7 @@ fn do_job(client: &DragonflyClient, job: Job) -> Result<(), DragonflyError> {
 #[derive(Deserialize)]
 pub struct AppConfig {
     pub base_url: String,
+    pub threads: usize,
     pub wait_duration: u64,
     pub auth0_domain: String,
     pub client_id: String,
@@ -96,6 +97,7 @@ fn main() -> Result<(), DragonflyError> {
         .add_source(config::File::with_name("Config.toml"))
         .add_source(config::Environment::with_prefix("DRAGONFLY_"))
         .set_default("base_url", "https://dragonfly.vipyrsec.com")?
+        .set_default("threads", 1)?
         .set_default("auth0_domain", "vipyrsec-dev.us.auth0.com")?
         .set_default("audience", "https://dragonfly.vipyrsec.local")?
         .set_default("grant_type", "password")?
@@ -105,9 +107,9 @@ fn main() -> Result<(), DragonflyError> {
 
     tracing_subscriber::fmt().init();
     let client = Arc::new(DragonflyClient::new(config)?);
-
-    let n_jobs = 5;
-    let pool = ThreadPool::new(n_jobs);
+    
+    let n_jobs = usize::from(client.config.threads);
+    let pool = ThreadPool::new(client.config.threads);
     info!("Started threadpool with {} workers", n_jobs);
 
     for _ in 0..n_jobs {
