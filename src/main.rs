@@ -183,8 +183,10 @@ fn main() -> Result<(), DragonflyError> {
                         warn!("Got 401 UNAUTHORIZED while trying to fetch job, revalidating and trying again...");
                         if let Err(reauth_err) = client.reauthorize() {
                             error!("Failed reauthorizing: {reauth_err:#?}, trying again next loop...");
+                        } else {
+                            info!("Successfully reauthorized. Will use new credentials next time around");
                         }
-                        info!("Successfully reauthorized. Will use new credentials next time around");
+
                         continue;
                     }
 
