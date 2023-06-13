@@ -107,8 +107,6 @@ fn authorize(
     let access_token = res.access_token;
     let expires_at = Local::now() + Duration::seconds(i64::from(res.expires_in));
 
-    println!("{}", res.expires_in);
-
     Ok(AuthenticationInformation {
         access_token,
         expires_at,
