@@ -45,6 +45,7 @@ fn fetch_rules(
         .get(format!("{base_url}/rules"))
         .header("Authorization", format!("Bearer {access_token}"))
         .send()?
+        .error_for_status()?
         .json()?;
 
     let rules_str = res
@@ -96,9 +97,17 @@ fn authorize(
         password: &config.password,
     };
 
-    let res: AuthResponse = http_client.post(url).json(&json_body).send()?.json()?;
+    let res: AuthResponse = http_client
+        .post(url)
+        .json(&json_body)
+        .send()?
+        .error_for_status()?
+        .json()?;
+
     let access_token = res.access_token;
     let expires_at = Local::now() + Duration::seconds(i64::from(res.expires_in));
+
+    println!("{}", res.expires_in);
 
     Ok(AuthenticationInformation {
         access_token,
@@ -185,6 +194,7 @@ impl DragonflyClient {
             .post(format!("{}/job", self.config.base_url))
             .header("Authorization", format!("Bearer {access_token}"))
             .send()?
+            .error_for_status()?
             .json()?;
 
         let job = match res {
@@ -206,7 +216,8 @@ impl DragonflyClient {
             .put(format!("{}/package", self.config.base_url))
             .header("Authorization", format!("Bearer {access_token}"))
             .json(&body)
-            .send()?;
+            .send()?
+            .error_for_status()?;
 
         Ok(())
     }

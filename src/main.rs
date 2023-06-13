@@ -7,13 +7,13 @@ use std::{path::Path, sync::Arc, thread, time::Duration};
 
 use api::DragonflyClient;
 use api_models::Job;
-use chrono::Local;
 use config::Config;
 use error::DragonflyError;
+use reqwest::StatusCode;
 use scanner::{scan_distribution, DistributionScanResults};
 use serde::Deserialize;
 use threadpool::ThreadPool;
-use tracing::{error, info, span, Level};
+use tracing::{error, info, span, warn, Level};
 
 use crate::api_models::SubmitJobResultsBody;
 
@@ -33,12 +33,10 @@ fn create_inspector_url(name: &str, version: &str, download_url: &str, path: &Pa
     url.into()
 }
 
-fn do_job(client: &DragonflyClient, job: Job) -> Result<(), DragonflyError> {
+fn do_job(client: &DragonflyClient, job: &Job) -> Result<(), DragonflyError> {
     let mut distribution_results: Vec<DistributionScanResults> = Vec::new();
-
-    for download_url in job.distributions {
-        info!("Scanning distribution {}...", download_url);
-        let result = scan_distribution(client, &download_url)?;
+    for download_url in &job.distributions {
+        let result = scan_distribution(client, download_url)?;
         distribution_results.push(result);
     }
 
@@ -61,8 +59,7 @@ fn do_job(client: &DragonflyClient, job: Job) -> Result<(), DragonflyError> {
             None
         };
 
-    info!("Finished scanning job! Sending results...");
-    client.submit_job_results(&SubmitJobResultsBody {
+    let body = SubmitJobResultsBody {
         name: &job.name,
         version: &job.version,
         score: if inspector_url.is_some() {
@@ -72,8 +69,9 @@ fn do_job(client: &DragonflyClient, job: Job) -> Result<(), DragonflyError> {
         },
         inspector_url: inspector_url.as_deref(),
         rules_matched: &highest_score_distribution.get_all_rules(),
-    })?;
-    info!("Successfully sent results for job");
+    };
+
+    client.submit_job_results(&body)?;
 
     Ok(())
 }
@@ -107,22 +105,14 @@ fn main() -> Result<(), DragonflyError> {
 
     tracing_subscriber::fmt().init();
     let client = Arc::new(DragonflyClient::new(config)?);
-    
-    let n_jobs = usize::from(client.config.threads);
+
+    let n_jobs = client.config.threads;
     let pool = ThreadPool::new(client.config.threads);
     info!("Started threadpool with {} workers", n_jobs);
 
     for _ in 0..n_jobs {
         let client = Arc::clone(&client);
         pool.execute(move || loop {
-            let state = { client.state.lock().unwrap() };
-            if Local::now() > state.authentication_information.expires_at {
-                if let Err(err) = client.reauthorize() {
-                    error!("Error while trying to reauthorize: {err:#?}");
-                    continue;
-                }
-            }
-
             match client.get_job() {
                 Ok(response) => {
                     if let Some(job) = response {
@@ -140,14 +130,45 @@ fn main() -> Result<(), DragonflyError> {
                                     Ok((hash, rules)) => {
                                         state.set_hash(hash);
                                         state.set_rules(rules);
+                                    },
+                                    Err(DragonflyError::HTTPError { source }) => if let Some(StatusCode::UNAUTHORIZED) = source.status() {
+                                        warn!("Got 401 UNAUTHORIZED while trying to fetch rules, updating creds...");
+                                        if let Err(reauth_err) = client.reauthorize() {
+                                            error!("Unexpected HTTP error while reauthorizing: {reauth_err:#?}");
+                                        } else {
+                                            info!("Successfully reauthorized, using new creds to fetch rules again...");
+                                            match client.fetch_rules() {
+                                                Ok((hash, rules)) => {
+                                                    state.set_hash(hash);
+                                                    state.set_rules(rules);
+                                                    info!("Successfully updated rules with new creds!");
+                                                },
+                                                Err(err) => error!("Failed fetching rules again with new creds! {err:#?}")
+                                            }
+
+                                        }
+                                    } else {
+                                        error!("Unexpected HTTP error while syncing rules: {source:#?}");
                                     }
                                     Err(err) => error!("Failed to sync rules: {:#?}", err),
                                 }
                             }
                         }
 
-                        if let Err(err) = do_job(&client, job) {
-                            error!("Unexpected error occured: {:#?}", err);
+                        if let Err(DragonflyError::HTTPError { source }) = do_job(&client, &job) {
+                            if let Some(StatusCode::UNAUTHORIZED) = source.status() {
+                                warn!("Got 401 UNAUTHORIZED while trying to send job results, updating creds...");
+                                if let Err(reauth_err) = client.reauthorize() {
+                                    error!("Error while trying to reauthorize! {reauth_err:#?}");
+                                } else {
+                                    info!("Successfully updated credentials, trying to send results again...");
+                                    if let Err(resend_err) = do_job(&client, &job) {
+                                        error!("Unexpected error while resending results: {resend_err:#?}") ;
+                                    }
+                                }
+                            }
+                        } else {
+                            info!("Successfully sent results!");
                         }
                     } else {
                         info!(
@@ -157,7 +178,18 @@ fn main() -> Result<(), DragonflyError> {
                         thread::sleep(Duration::from_secs(client.config.wait_duration));
                     }
                 }
-                Err(err) => error!("Unexpected HTTP error: {err:#?}"),
+                Err(err) => {
+                    if let Some(StatusCode::UNAUTHORIZED) = err.status() {
+                        warn!("Got 401 UNAUTHORIZED while trying to fetch job, revalidating and trying again...");
+                        if let Err(reauth_err) = client.reauthorize() {
+                            error!("Failed reauthorizing: {reauth_err:#?}, trying again next loop...");
+                        }
+                        info!("Successfully reauthorized. Will use new credentials next time around");
+                        continue;
+                    }
+
+                    error!("Unexpected HTTP error: {err:#?}");
+                }
             }
         });
     }
