@@ -58,20 +58,61 @@ fn do_job(client: &DragonflyClient, job: &Job) -> Result<(), DragonflyError> {
         } else {
             None
         };
+    
+    let score = if inspector_url.is_some() { highest_score_distribution.get_total_score() } else { 0 };
+    let inspector_url = inspector_url.as_deref();
+    let rules_matched = &highest_score_distribution.get_all_rules();
+
+    info!("
+Score: {score}
+inspector_url: {inspector_url:#?}
+rules_matched: {rules_matched:#?}
+    ");
 
     let body = SubmitJobResultsBody {
         name: &job.name,
         version: &job.version,
-        score: if inspector_url.is_some() {
-            highest_score_distribution.get_total_score()
-        } else {
-            0
-        },
-        inspector_url: inspector_url.as_deref(),
-        rules_matched: &highest_score_distribution.get_all_rules(),
+        score,
+        inspector_url,
+        rules_matched,
     };
+    
+    // We perform this validation here instead of upstream (i.e in runner) because
+    // here, we only have to re-send the HTTP request with the same results
+    // If we did it upstream (i.e in runner), we'd need to run the whole scanning process again
+    if let Err(err) = client.submit_job_results(&body) {
+        if let Some(StatusCode::UNAUTHORIZED) = err.status() {
+            warn!("Got 401 UNAUTHORIZED while trying to send results upstream, revalidating creds...");
+            client.reauthorize()?;
+            info!("Successfully reauthorized! Sending results again...");
+            client.submit_job_results(&body)?;
+            info!("Successfully sent results!");
+        }
+    }
 
-    client.submit_job_results(&body)?;
+    Ok(())
+}
+
+fn runner(client: &DragonflyClient, job: &Job) -> Result<(), DragonflyError> {
+
+    info!("Starting job {}@{}", job.name, job.version);
+
+    // Control when the MutexGuard is dropped
+    {
+        let mut state = client.state.lock().unwrap();
+        if state.hash != job.hash {
+            info!("Local hash: {}, remote hash: {}", state.hash, job.hash);
+            info!("State is behind, syncing...");
+            let (hash, rules) = client.fetch_rules()?;
+            info!("Successfully synced state, we are now on hash {hash}");
+
+            state.set_hash(hash);
+            state.set_rules(rules);
+        }
+    }
+
+    do_job(&client, &job)?;
+    info!("Successfully sent results upstream");
 
     Ok(())
 }
@@ -114,84 +155,34 @@ fn main() -> Result<(), DragonflyError> {
         let client = Arc::clone(&client);
         pool.execute(move || loop {
             match client.get_job() {
-                Ok(response) => {
-                    if let Some(job) = response {
-                        let span =
-                            span!(Level::INFO, "Job", name = job.name, version = job.version);
-                        let _enter = span.enter();
-
-                        info!("Start job {}@{}", job.name, job.version);
-                        {
-                            let mut state = client.state.lock().unwrap();
-                            if state.hash != job.hash {
-                                info!("Local hash: {}, remote hash: {}", state.hash, job.hash);
-                                info!("State is behind, syncing...");
-                                match client.fetch_rules() {
-                                    Ok((hash, rules)) => {
-                                        state.set_hash(hash);
-                                        state.set_rules(rules);
-                                    },
-                                    Err(DragonflyError::HTTPError { source }) => if let Some(StatusCode::UNAUTHORIZED) = source.status() {
-                                        warn!("Got 401 UNAUTHORIZED while trying to fetch rules, updating creds...");
-                                        if let Err(reauth_err) = client.reauthorize() {
-                                            error!("Unexpected HTTP error while reauthorizing: {reauth_err:#?}");
-                                        } else {
-                                            info!("Successfully reauthorized, using new creds to fetch rules again...");
-                                            match client.fetch_rules() {
-                                                Ok((hash, rules)) => {
-                                                    state.set_hash(hash);
-                                                    state.set_rules(rules);
-                                                    info!("Successfully updated rules with new creds!");
-                                                },
-                                                Err(err) => error!("Failed fetching rules again with new creds! {err:#?}")
-                                            }
-
-                                        }
-                                    } else {
-                                        error!("Unexpected HTTP error while syncing rules: {source:#?}");
-                                    }
-                                    Err(err) => error!("Failed to sync rules: {:#?}", err),
-                                }
-                            }
-                        }
-
-                        if let Err(DragonflyError::HTTPError { source }) = do_job(&client, &job) {
-                            if let Some(StatusCode::UNAUTHORIZED) = source.status() {
-                                warn!("Got 401 UNAUTHORIZED while trying to send job results, updating creds...");
-                                if let Err(reauth_err) = client.reauthorize() {
-                                    error!("Error while trying to reauthorize! {reauth_err:#?}");
-                                } else {
-                                    info!("Successfully updated credentials, trying to send results again...");
-                                    if let Err(resend_err) = do_job(&client, &job) {
-                                        error!("Unexpected error while resending results: {resend_err:#?}") ;
-                                    }
-                                }
-                            }
-                        } else {
-                            info!("Successfully sent results!");
-                        }
-                    } else {
-                        info!(
-                            "No job found! Trying again in {} seconds...",
-                            client.config.wait_duration
-                        );
-                        thread::sleep(Duration::from_secs(client.config.wait_duration));
+                Ok(Some(job)) => {
+                    // Set up logging
+                    let span =
+                        span!(Level::INFO, "Job", name = job.name, version = job.version);
+                    let _enter = span.enter();
+                    
+                    if let Err(err) = runner(&client, &job) {
+                        error!("Unexpected error: {err:#?}");
                     }
-                }
-                Err(err) => {
-                    if let Some(StatusCode::UNAUTHORIZED) = err.status() {
-                        warn!("Got 401 UNAUTHORIZED while trying to fetch job, revalidating and trying again...");
-                        if let Err(reauth_err) = client.reauthorize() {
-                            error!("Failed reauthorizing: {reauth_err:#?}, trying again next loop...");
-                        } else {
-                            info!("Successfully reauthorized. Will use new credentials next time around");
-                        }
+                },
 
+                Ok(None) => {
+                    let s = client.config.wait_duration;
+                    info!("No job found! Trying again in {s} seconds...");
+                    thread::sleep(Duration::from_secs(s));
+                },
+
+                Err(http_error) if http_error.status() == Some(StatusCode::UNAUTHORIZED) => {
+                    warn!("Got 401 UNAUTHORIZED while fetching rules, revalidating credentials and trying again...");
+                    if let Err(reauth_error) = client.reauthorize() {
+                        error!("Failed reauthorizing credentials! {reauth_error:#?}");
                         continue;
                     }
 
-                    error!("Unexpected HTTP error: {err:#?}");
-                }
+                    info!("Successfully reauthorized, will use new credentials next time around");
+                },
+
+                Err(err) => error!("Unexpected error while fetching rules: {err:#?}")
             }
         });
     }
