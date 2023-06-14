@@ -58,16 +58,22 @@ fn do_job(client: &DragonflyClient, job: &Job) -> Result<(), DragonflyError> {
         } else {
             None
         };
-    
-    let score = if inspector_url.is_some() { highest_score_distribution.get_total_score() } else { 0 };
+
+    let score = if inspector_url.is_some() {
+        highest_score_distribution.get_total_score()
+    } else {
+        0
+    };
     let inspector_url = inspector_url.as_deref();
     let rules_matched = &highest_score_distribution.get_all_rules();
 
-    info!("
+    info!(
+        "
 Score: {score}
 inspector_url: {inspector_url:#?}
 rules_matched: {rules_matched:#?}
-    ");
+    "
+    );
 
     let body = SubmitJobResultsBody {
         name: &job.name,
@@ -76,13 +82,15 @@ rules_matched: {rules_matched:#?}
         inspector_url,
         rules_matched,
     };
-    
+
     // We perform this validation here instead of upstream (i.e in runner) because
     // here, we only have to re-send the HTTP request with the same results
     // If we did it upstream (i.e in runner), we'd need to run the whole scanning process again
     if let Err(err) = client.submit_job_results(&body) {
         if let Some(StatusCode::UNAUTHORIZED) = err.status() {
-            warn!("Got 401 UNAUTHORIZED while trying to send results upstream, revalidating creds...");
+            warn!(
+                "Got 401 UNAUTHORIZED while trying to send results upstream, revalidating creds..."
+            );
             client.reauthorize()?;
             info!("Successfully reauthorized! Sending results again...");
             client.submit_job_results(&body)?;
@@ -94,7 +102,6 @@ rules_matched: {rules_matched:#?}
 }
 
 fn runner(client: &DragonflyClient, job: &Job) -> Result<(), DragonflyError> {
-
     info!("Starting job {}@{}", job.name, job.version);
 
     // Control when the MutexGuard is dropped
@@ -160,7 +167,7 @@ fn main() -> Result<(), DragonflyError> {
                     let span =
                         span!(Level::INFO, "Job", name = job.name, version = job.version);
                     let _enter = span.enter();
-                    
+
                     if let Err(err) = runner(&client, &job) {
                         error!("Unexpected error: {err:#?}");
                     }
