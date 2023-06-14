@@ -144,8 +144,8 @@ fn main() -> Result<(), DragonflyError> {
         .add_source(config::Environment::with_prefix("DRAGONFLY_"))
         .set_default("base_url", "https://dragonfly.vipyrsec.com")?
         .set_default("threads", 1)?
-        .set_default("auth0_domain", "vipyrsec-dev.us.auth0.com")?
-        .set_default("audience", "https://dragonfly.vipyrsec.local")?
+        .set_default("auth0_domain", "vipyrsec.us.auth0.com")?
+        .set_default("audience", "https://dragonfly.vipyrsec.com")?
         .set_default("grant_type", "password")?
         .set_default("wait_duration", 60u64)?
         .build()?
