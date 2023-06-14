@@ -118,7 +118,7 @@ fn runner(client: &DragonflyClient, job: &Job) -> Result<(), DragonflyError> {
         }
     }
 
-    do_job(&client, &job)?;
+    do_job(client, job)?;
     info!("Successfully sent results upstream");
 
     Ok(())
