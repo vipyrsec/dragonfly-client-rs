@@ -1,12 +1,7 @@
 use std::{path::PathBuf, io::{Read, Cursor}, collections::HashSet};
 
-<<<<<<< Updated upstream
 use tar;
 use yara::{Rules, Rule, MetadataValue};
-=======
-use tracing::info;
-use yara::{MetadataValue, Rule, Rules};
->>>>>>> Stashed changes
 use zip::ZipArchive;
 
 use crate::{error::DragonflyError, api::DragonflyClient};
@@ -95,10 +90,6 @@ fn get_rule_score(rule: &Rule) -> Option<i64> {
     }
 }
 
-<<<<<<< Updated upstream
-
-pub fn scan_zipfile(zip:&mut  ZipArchive<Cursor<Vec<u8>>>, download_url: &String, rules: &Rules) -> Result<DistributionScanResults, DragonflyError> {
-=======
 fn get_filetypes<'a>(rule: &'a Rule) -> Vec<&'a str> {
     let m = rule
         .metadatas
@@ -118,7 +109,6 @@ pub fn scan_zipfile(
     download_url: &str,
     rules: &Rules,
 ) -> Result<DistributionScanResults, DragonflyError> {
->>>>>>> Stashed changes
     let mut file_scan_results: Vec<FileScanResult> = Vec::new();
     let file_names: Vec<String> = zip.file_names().map(|name| name.to_owned()).collect();
     for file_name in file_names {
@@ -128,18 +118,6 @@ pub fn scan_zipfile(
         
         let rules_matched = rules.scan_mem(&buffer, 10)?;
 
-<<<<<<< Updated upstream
-        file_scan_results.push(FileScanResult { 
-            path: file_name.into(), 
-            rules: rules_matched 
-                .into_iter()
-                .map(|rule|
-                    RuleScore {
-                        rule_name: rule.identifier.to_owned(),
-                        score: get_rule_score(&rule),
-                    })
-                .collect()
-=======
         file_scan_results.push(FileScanResult {
             path: PathBuf::from(&file_name),
             rules: rules_matched
@@ -150,7 +128,6 @@ pub fn scan_zipfile(
                     score: get_rule_score(&rule),
                 })
                 .collect(),
->>>>>>> Stashed changes
         });
     }
 
@@ -166,19 +143,6 @@ pub fn scan_tarball(tar: &mut tar::Archive<Cursor<Vec<u8>>>, download_url: &Stri
         let mut buffer = Vec::new();
         entry.read_to_end(&mut buffer)?;
 
-<<<<<<< Updated upstream
-        let rules_matched = rules.scan_mem(&buffer, 10)?; 
-
-        file_scan_results.push(FileScanResult { 
-            path: entry.path()?.to_path_buf(), 
-            rules: rules_matched
-                .into_iter()
-                .map(|rule| 
-                     RuleScore { 
-                         rule_name: rule.identifier.to_owned(), 
-                         score: get_rule_score(&rule),
-                     })
-=======
         let rules_matched = rules.scan_mem(&buffer, 10)?;
         let path = entry.path()?;
 
@@ -191,7 +155,6 @@ pub fn scan_tarball(tar: &mut tar::Archive<Cursor<Vec<u8>>>, download_url: &Stri
                     rule_name: rule.identifier.to_owned(),
                     score: get_rule_score(&rule),
                 })
->>>>>>> Stashed changes
                 .collect(),
         });
     }
