@@ -88,7 +88,7 @@ rules_matched: {rules_matched:#?}
     // If we did it upstream (i.e in runner), we'd need to run the whole scanning process again
     if let Err(err) = client.submit_job_results(&body) {
         if let Some(StatusCode::UNAUTHORIZED) = err.status() {
-            warn!(
+            info!(
                 "Got 401 UNAUTHORIZED while trying to send results upstream, revalidating creds..."
             );
             client.reauthorize()?;
@@ -180,7 +180,7 @@ fn main() -> Result<(), DragonflyError> {
                 },
 
                 Err(http_error) if http_error.status() == Some(StatusCode::UNAUTHORIZED) => {
-                    warn!("Got 401 UNAUTHORIZED while fetching rules, revalidating credentials and trying again...");
+                    info!("Got 401 UNAUTHORIZED while fetching rules, revalidating credentials and trying again...");
                     if let Err(reauth_error) = client.reauthorize() {
                         error!("Failed reauthorizing credentials! {reauth_error:#?}");
                         continue;
