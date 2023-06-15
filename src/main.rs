@@ -155,7 +155,7 @@ fn main() -> Result<(), DragonflyError> {
     let client = Arc::new(DragonflyClient::new(config)?);
 
     let n_jobs = client.config.threads;
-    let pool = ThreadPool::new(client.config.threads);
+    let pool = ThreadPool::new(n_jobs);
     info!("Started threadpool with {} workers", n_jobs);
 
     for _ in 0..n_jobs {
