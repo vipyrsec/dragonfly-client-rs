@@ -122,7 +122,14 @@ pub fn scan_zipfile(
             path: PathBuf::from(&file_name),
             rules: rules_matched
                 .into_iter()
-                .filter(|rule| get_filetypes(&rule).iter().any(|filetype| file_name.ends_with(filetype)))
+                .filter(|rule| {
+                    let filetypes = get_filetypes(&rule);
+                    if filetypes.is_empty() {
+                        true
+                    } else {
+                        filetypes.iter().any(|filetype| file_name.ends_with(filetype))
+                    }
+                })
                 .map(|rule| RuleScore {
                     rule_name: rule.identifier.to_owned(),
                     score: get_rule_score(&rule),
@@ -150,7 +157,14 @@ pub fn scan_tarball(tar: &mut tar::Archive<Cursor<Vec<u8>>>, download_url: &Stri
             path: path.to_path_buf(),
             rules: rules_matched
                 .into_iter()
-                .filter(|rule| get_filetypes(&rule).iter().any(|filetype| path.ends_with(filetype)))
+                .filter(|rule| {
+                    let filetypes = get_filetypes(&rule);
+                    if filetypes.is_empty() {
+                        true
+                    } else {
+                        filetypes.iter().any(|filetype| path.ends_with(filetype))
+                    }
+                })
                 .map(|rule| RuleScore {
                     rule_name: rule.identifier.to_owned(),
                     score: get_rule_score(&rule),
