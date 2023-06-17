@@ -50,8 +50,8 @@ impl DistributionScanResults {
         rules.iter().map(|i| i.score.unwrap_or(0)).sum()
     }
 
-    pub fn get_all_rules(&self) -> HashSet<&String> {
-        let mut rule_names: HashSet<&String> = HashSet::new();
+    pub fn get_all_rules(&self) -> HashSet<&str> {
+        let mut rule_names: HashSet<&str> = HashSet::new();
 
         for file_scan_result in &self.file_scan_results {
             for rule in &file_scan_result.rules {
