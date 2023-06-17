@@ -36,6 +36,7 @@ pub struct DragonflyClient {
     pub state: Mutex<State>,
 }
 
+
 fn fetch_rules(
     client: &Client,
     base_url: &str,

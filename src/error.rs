@@ -4,6 +4,7 @@ use config::ConfigError;
 use thiserror::Error;
 use zip::result::ZipError;
 
+#[allow(clippy::module_name_repetitions)]
 #[derive(Error, Debug)]
 pub enum DragonflyError {
     #[error("Yara Error: {source:#?}")]

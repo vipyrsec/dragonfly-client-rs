@@ -98,6 +98,20 @@ fn get_rule_score(rule: &Rule) -> Option<i64> {
     }
 }
 
+fn get_filetypes<'a>(rule: &'a Rule) -> Vec<&'a str> {
+    let m = rule
+        .metadatas
+        .iter()
+        .find(|metadata| metadata.identifier == "filetypes")
+        .map(|metadata| &metadata.value);
+
+    if let Some(MetadataValue::String(string)) = m {
+        string.split(' ').collect()
+    } else {
+        Vec::new()
+    }
+}
+
 pub fn scan_zipfile(
     zip: &mut ZipArchive<Cursor<Vec<u8>>>,
     download_url: &str,
@@ -116,9 +130,19 @@ pub fn scan_zipfile(
         let rules_matched = rules.scan_mem(&buffer, 10)?;
 
         file_scan_results.push(FileScanResult {
-            path: file_name.into(),
+            path: PathBuf::from(&file_name),
             rules: rules_matched
                 .into_iter()
+                .filter(|rule| {
+                    let filetypes = get_filetypes(rule);
+                    if filetypes.is_empty() {
+                        true
+                    } else {
+                        filetypes
+                            .iter()
+                            .any(|filetype| file_name.ends_with(filetype))
+                    }
+                })
                 .map(|rule| RuleScore {
                     rule_name: rule.identifier.to_owned(),
                     score: get_rule_score(&rule),
@@ -129,7 +153,7 @@ pub fn scan_zipfile(
 
     Ok(DistributionScanResults {
         file_scan_results,
-        download_url: download_url.to_string(),
+        download_url: download_url.to_owned(),
     })
 }
 
@@ -147,11 +171,20 @@ pub fn scan_tarball(
         entry.read_to_end(&mut buffer)?;
 
         let rules_matched = rules.scan_mem(&buffer, 10)?;
+        let path = entry.path()?;
 
         file_scan_results.push(FileScanResult {
-            path: entry.path()?.to_path_buf(),
+            path: path.to_path_buf(),
             rules: rules_matched
                 .into_iter()
+                .filter(|rule| {
+                    let filetypes = get_filetypes(rule);
+                    if filetypes.is_empty() {
+                        true
+                    } else {
+                        filetypes.iter().any(|filetype| path.ends_with(filetype))
+                    }
+                })
                 .map(|rule| RuleScore {
                     rule_name: rule.identifier.to_owned(),
                     score: get_rule_score(&rule),
