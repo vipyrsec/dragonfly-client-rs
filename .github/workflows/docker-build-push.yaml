@@ -2,11 +2,6 @@ name: "Docker Build and Push"
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
-    tags:
-      - v*
   pull_request:
   workflow_call:
     inputs:
@@ -83,7 +78,7 @@ jobs:
         with:
           context: .
           platforms: ${{ matrix.platform }}
-          push: ${{ inputs.push }}
+          push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
