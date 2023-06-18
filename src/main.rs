@@ -140,8 +140,8 @@ pub struct AppConfig {
 
 fn main() -> Result<(), DragonflyError> {
     let config: AppConfig = Config::builder()
-        .add_source(config::File::with_name("Config.toml"))
-        .add_source(config::Environment::with_prefix("DRAGONFLY_"))
+        .add_source(config::File::with_name("Config.toml").required(false))
+        .add_source(config::Environment::default())
         .set_default("base_url", "https://dragonfly.vipyrsec.com")?
         .set_default("threads", 1)?
         .set_default("auth0_domain", "vipyrsec.us.auth0.com")?
