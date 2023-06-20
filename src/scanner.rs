@@ -102,7 +102,7 @@ fn get_filetypes<'a>(rule: &'a Rule) -> Vec<&'a str> {
     let m = rule
         .metadatas
         .iter()
-        .find(|metadata| metadata.identifier == "filetypes")
+        .find(|metadata| metadata.identifier == "filetype")
         .map(|metadata| &metadata.value);
 
     if let Some(MetadataValue::String(string)) = m {
