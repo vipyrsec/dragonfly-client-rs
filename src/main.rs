@@ -67,33 +67,17 @@ fn do_job(client: &DragonflyClient, job: &Job) -> Result<(), DragonflyError> {
     let inspector_url = inspector_url.as_deref();
     let rules_matched = &highest_score_distribution.get_all_rules();
 
-    info!(
-        "
-Score: {score}
-inspector_url: {inspector_url:#?}
-rules_matched: {rules_matched:#?}
-    "
-    );
-
-    let body = SubmitJobResultsBody {
-        name: &job.name,
-        version: &job.version,
-        score,
-        inspector_url,
-        rules_matched,
-    };
-
     // We perform this validation here instead of upstream (i.e in runner) because
     // here, we only have to re-send the HTTP request with the same results
     // If we did it upstream (i.e in runner), we'd need to run the whole scanning process again
-    if let Err(err) = client.submit_job_results(&body) {
+    if let Err(err) = client.submit_job_results(&job, score, inspector_url, rules_matched) {
         if let Some(StatusCode::UNAUTHORIZED) = err.status() {
             info!(
                 "Got 401 UNAUTHORIZED while trying to send results upstream, revalidating creds..."
             );
             client.reauthorize()?;
             info!("Successfully reauthorized! Sending results again...");
-            client.submit_job_results(&body)?;
+            client.submit_job_results(&job, score, inspector_url, rules_matched)?;
             info!("Successfully sent results!");
         }
     }
