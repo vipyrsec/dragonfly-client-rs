@@ -9,6 +9,7 @@ pub struct SubmitJobResultsBody<'a> {
     pub score: i64,
     pub inspector_url: Option<&'a str>,
     pub rules_matched: &'a HashSet<&'a str>,
+    pub commit: &'a str,
 }
 
 #[derive(Debug, Deserialize)]
