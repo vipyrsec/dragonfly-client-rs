@@ -1,0 +1,70 @@
+on:
+  workflow_call:
+    inputs:
+      runs-on:
+        description: Runner image
+        required: true
+        type: string
+      version:
+        description: YARA version
+        default: "4.3.1"
+        required: false
+        type: string
+    outputs:
+      artifacts:
+        description: YARA Artifacts
+        value: ${{ jobs.output.outputs.artifacts }}
+      include-dir:
+        description: YARA Includes Directory
+        value: libyara/include
+      library-path:
+        description: YARA Library Path
+        value: .libs
+
+jobs:
+  yara:
+    runs-on: ${{ inputs.runs-on }}
+    steps:
+      - name: Cache YARA
+        id: cache-yara
+        uses: actions/cache@88522ab9f39a2ea568f7027eddc7d8d8bc9d59c8 # v3.3.1
+        with:
+          key: yara-${{ inputs.version }}-${{ runner.os }}-${{ runner.arch }}
+          path: yara-${{ inputs.version }}
+
+      - name: Compile YARA
+        if: steps.cache-yara.outputs.cache-hit != 'true' && runner.os == 'Linux'
+        run: |
+          curl -sL https://github.com/VirusTotal/yara/archive/refs/tags/v${{ inputs.version }}.tar.gz -o yara-${{ inputs.version }}.tar.gz
+          tar -xzf yara-${{ inputs.version }}.tar.gz && cd yara-${{ inputs.version }} && ./bootstrap.sh && ./configure && make
+
+      - name: Upload YARA
+        uses: actions/upload-artifact@0b7f8abb1508181956e8e162db84b466c27e18ce # v3.1.2
+        with:
+          if-no-files-found: error
+          name: yara-${{ inputs.version }}-${{ runner.os }}-${{ runner.arch }}
+          path: |
+            yara-${{ inputs.version }}/libyara/include/yara
+            yara-${{ inputs.version }}/libyara/include/yara.h
+            yara-${{ inputs.version }}/.libs/libyara*
+          retention-days: 1
+
+    outputs:
+      artifacts: yara-${{ inputs.version }}-${{ runner.os }}-${{ runner.arch }}
+
+  output:
+    needs: yara
+
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Write Matrix Output
+        id: write
+        uses: cloudposse/github-action-matrix-outputs-write@main
+        with:
+          matrix-step-name: yara
+          matrix-key: ${{ inputs.runs-on }}
+          outputs: |-
+            artifacts: ${{ needs.yara.outputs.artifacts }}
+
+    outputs:
+      artifacts: ${{ fromJson(steps.write.outputs.result).artifacts }}

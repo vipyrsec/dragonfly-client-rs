@@ -1,6 +1,7 @@
 use std::{
+    collections::HashSet,
     io::{Cursor, Read},
-    sync::Mutex, collections::HashSet,
+    sync::Mutex,
 };
 
 use chrono::{DateTime, Duration, Local};
@@ -210,7 +211,6 @@ impl DragonflyClient {
         inspector_url: Option<&str>,
         rules_matched: &HashSet<&str>,
     ) -> reqwest::Result<()> {
-
         let state = self.state.lock().unwrap();
         let access_token = &state.authentication_information.access_token;
         let commit = &state.hash;
