@@ -1,6 +1,6 @@
 use std::{
     io::{Cursor, Read},
-    sync::Mutex,
+    sync::Mutex, collections::HashSet,
 };
 
 use chrono::{DateTime, Duration, Local};
@@ -35,7 +35,6 @@ pub struct DragonflyClient {
     pub client: Client,
     pub state: Mutex<State>,
 }
-
 
 fn fetch_rules(
     client: &Client,
@@ -204,15 +203,30 @@ impl DragonflyClient {
         Ok(job)
     }
 
-    pub fn submit_job_results(&self, body: &SubmitJobResultsBody) -> reqwest::Result<()> {
-        let access_token = &self
-            .state
-            .lock()
-            .unwrap()
-            .authentication_information
-            .access_token;
+    pub fn submit_job_results(
+        &self,
+        job: &Job,
+        score: i64,
+        inspector_url: Option<&str>,
+        rules_matched: &HashSet<&str>,
+    ) -> reqwest::Result<()> {
+
+        let state = self.state.lock().unwrap();
+        let access_token = &state.authentication_information.access_token;
+        let commit = &state.hash;
+        let url = format!("{}/package", self.config.base_url);
+
+        let body = SubmitJobResultsBody {
+            name: &job.name,
+            version: &job.version,
+            score,
+            inspector_url,
+            rules_matched,
+            commit,
+        };
+
         self.client
-            .put(format!("{}/package", self.config.base_url))
+            .put(url)
             .header("Authorization", format!("Bearer {access_token}"))
             .json(&body)
             .send()?
