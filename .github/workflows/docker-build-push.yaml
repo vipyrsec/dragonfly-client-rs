@@ -41,7 +41,7 @@ jobs:
         uses: actions/checkout@c85c95e3d7251135ab7dc9ce3241c5835cc595a9 # v3.5.3
 
       - name: Install cosign
-        uses: sigstore/cosign-installer@b6fc91790eda82dbba10c76a63507d45b818c83d # v3.0.4
+        uses: sigstore/cosign-installer@d13028333d784fcc802b67ec924bcebe75aa0a5f # v3.1.0
         with:
           cosign-release: "v2.0.2"
 
