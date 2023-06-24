@@ -13,9 +13,7 @@ use reqwest::StatusCode;
 use scanner::{scan_distribution, DistributionScanResults};
 use serde::Deserialize;
 use threadpool::ThreadPool;
-use tracing::{error, info, span, warn, Level};
-
-use crate::api_models::SubmitJobResultsBody;
+use tracing::{error, info, span, Level};
 
 fn create_inspector_url(name: &str, version: &str, download_url: &str, path: &Path) -> String {
     let mut url = reqwest::Url::parse(download_url).unwrap();
@@ -70,14 +68,14 @@ fn do_job(client: &DragonflyClient, job: &Job) -> Result<(), DragonflyError> {
     // We perform this validation here instead of upstream (i.e in runner) because
     // here, we only have to re-send the HTTP request with the same results
     // If we did it upstream (i.e in runner), we'd need to run the whole scanning process again
-    if let Err(err) = client.submit_job_results(&job, score, inspector_url, rules_matched) {
+    if let Err(err) = client.submit_job_results(job, score, inspector_url, rules_matched) {
         if let Some(StatusCode::UNAUTHORIZED) = err.status() {
             info!(
                 "Got 401 UNAUTHORIZED while trying to send results upstream, revalidating creds..."
             );
             client.reauthorize()?;
             info!("Successfully reauthorized! Sending results again...");
-            client.submit_job_results(&job, score, inspector_url, rules_matched)?;
+            client.submit_job_results(job, score, inspector_url, rules_matched)?;
             info!("Successfully sent results!");
         }
     }
