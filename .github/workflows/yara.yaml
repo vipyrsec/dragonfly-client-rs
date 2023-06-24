@@ -11,15 +11,15 @@ on:
         required: false
         type: string
     outputs:
-      artifact-headers:
-        description: Artifact name for headers
-        value: ${{ jobs.output.outputs.artifact-headers }}
-      artifact-libs:
-        description: Artifact name for libs
-        value: ${{ jobs.output.outputs.artifact-libs }}
-      artifact-pkgconfig:
-        description: Artifact name for pkgconfig
-        value: ${{ jobs.output.outputs.artifact-pkgconfig }}
+      artifacts:
+        description: YARA Artifacts
+        value: ${{ jobs.output.outputs.artifacts }}
+      include-dir:
+        description: YARA Includes Directory
+        value: libyara/include
+      library-path:
+        description: YARA Library Path
+        value: .libs
 
 jobs:
   yara:
@@ -38,39 +38,19 @@ jobs:
           curl -sL https://github.com/VirusTotal/yara/archive/refs/tags/v${{ inputs.version }}.tar.gz -o yara-${{ inputs.version }}.tar.gz
           tar -xzf yara-${{ inputs.version }}.tar.gz && cd yara-${{ inputs.version }} && ./bootstrap.sh && ./configure && make
 
-      - name: Upload YARA headers
-        id: artifact-headers
+      - name: Upload YARA
         uses: actions/upload-artifact@0b7f8abb1508181956e8e162db84b466c27e18ce # v3.1.2
         with:
           if-no-files-found: error
-          name: yara-headers-${{ runner.os }}-${{ runner.arch }}
+          name: yara-${{ inputs.version }}-${{ runner.os }}-${{ runner.arch }}
           path: |
+            yara-${{ inputs.version }}/libyara/include/yara
             yara-${{ inputs.version }}/libyara/include/yara.h
-            yara-${{ inputs.version }}/libyara/include/yara/*.h
-          retention-days: 1
-
-      - name: Upload YARA libs
-        id: artifact-libs
-        uses: actions/upload-artifact@0b7f8abb1508181956e8e162db84b466c27e18ce # v3.1.2
-        with:
-          if-no-files-found: error
-          name: yara-libs-${{ runner.os }}-${{ runner.arch }}
-          path: yara-${{ inputs.version }}/.libs/libyara*
-          retention-days: 1
-
-      - name: Upload YARA pkgconfig
-        id: artifact-pkgconfig
-        uses: actions/upload-artifact@0b7f8abb1508181956e8e162db84b466c27e18ce # v3.1.2
-        with:
-          if-no-files-found: error
-          name: yara-pc-${{ runner.os }}-${{ runner.arch }}
-          path: yara-${{ inputs.version }}/yara.pc
+            yara-${{ inputs.version }}/.libs/libyara*
           retention-days: 1
 
     outputs:
-      artifact-headers: yara-headers-${{ runner.os }}-${{ runner.arch }}
-      artifact-libs: yara-libs-${{ runner.os }}-${{ runner.arch }}
-      artifact-pkgconfig: yara-pc-${{ runner.os }}-${{ runner.arch }}
+      artifacts: yara-${{ inputs.version }}-${{ runner.os }}-${{ runner.arch }}
 
   output:
     needs: yara
@@ -84,11 +64,7 @@ jobs:
           matrix-step-name: yara
           matrix-key: ${{ inputs.runs-on }}
           outputs: |-
-            artifact-headers: ${{ needs.yara.outputs.artifact-headers }}
-            artifact-libs: ${{ needs.yara.outputs.artifact-libs }}
-            artifact-pkgconfig: ${{ needs.yara.outputs.artifact-pkgconfig }}
+            artifacts: ${{ needs.yara.outputs.artifacts }}
 
     outputs:
-      artifact-headers: ${{ fromJson(steps.write.outputs.result).artifact-headers }}
-      artifact-libs: ${{ fromJson(steps.write.outputs.result).artifact-libs }}
-      artifact-pkgconfig: ${{ fromJson(steps.write.outputs.result).artifact-pkgconfig }}
+      artifacts: ${{ fromJson(steps.write.outputs.result).artifacts }}

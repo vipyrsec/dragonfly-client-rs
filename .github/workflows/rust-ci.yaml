@@ -36,23 +36,11 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@8e5e7e5ab8b370d6c329ec480221332ada57f0ab # v3.5.2
 
-      - name: Download YARA headers
+      - name: Download YARA
         uses: actions/download-artifact@9bc31d5ccc31df68ecc42ccf4149144866c47d8a # v3.0.2
         with:
-          name: ${{ needs.yara.outputs.artifact-headers }}
-          path: .yara/include
-
-      - name: Download YARA libs
-        uses: actions/download-artifact@9bc31d5ccc31df68ecc42ccf4149144866c47d8a # v3.0.2
-        with:
-          name: ${{ needs.yara.outputs.artifact-libs }}
-          path: .yara/lib
-
-      - name: Download YARA pkgconfig
-        uses: actions/download-artifact@9bc31d5ccc31df68ecc42ccf4149144866c47d8a # v3.0.2
-        with:
-          name: ${{ needs.yara.outputs.artifact-pkgconfig }}
-          path: .yara/lib/pkgconfig
+          name: ${{ needs.yara.outputs.artifacts }}
+          path: .yara
 
       - name: Setup Rust
         run: |
@@ -66,8 +54,8 @@ jobs:
 
       - name: Run Clippy
         env:
-          YARA_INCLUDE_DIR: ${{ github.workspace }}/.yara/include
-          YARA_LIBRARY_PATH: ${{ github.workspace }}/.yara/lib
+          YARA_INCLUDE_DIR: ${{ github.workspace }}/.yara/${{ needs.yara.outputs.include-dir }}
+          YARA_LIBRARY_PATH: ${{ github.workspace }}/.yara/${{ needs.yara.outputs.library-path }}
         run: cargo clippy -- -D clippy::all -D clippy::pedantic -D clippy::cargo -A clippy::cargo_common_metadata
 
   yara-test:
@@ -98,7 +86,7 @@ jobs:
       result: ${{ steps.read.outputs.result }}
 
   test:
-    needs: yara-test-output
+    needs: [yara-test, yara-test-output]
 
     strategy:
       matrix:
@@ -111,23 +99,11 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@8e5e7e5ab8b370d6c329ec480221332ada57f0ab # v3.5.2
 
-      - name: Download YARA headers
+      - name: Download YARA
         uses: actions/download-artifact@9bc31d5ccc31df68ecc42ccf4149144866c47d8a # v3.0.2
         with:
-          name: ${{ fromJson(needs.yara-test-output.outputs.result).artifact-headers[matrix.triple.runs-on] }}
-          path: .yara/include
-
-      - name: Download YARA libs
-        uses: actions/download-artifact@9bc31d5ccc31df68ecc42ccf4149144866c47d8a # v3.0.2
-        with:
-          name: ${{ fromJson(needs.yara-test-output.outputs.result).artifact-libs[matrix.triple.runs-on] }}
-          path: .yara/lib
-
-      - name: Download YARA pkgconfig
-        uses: actions/download-artifact@9bc31d5ccc31df68ecc42ccf4149144866c47d8a # v3.0.2
-        with:
-          name: ${{ fromJson(needs.yara-test-output.outputs.result).artifact-pkgconfig[matrix.triple.runs-on] }}
-          path: .yara/lib/pkgconfig
+          name: ${{ fromJson(needs.yara-test-output.outputs.result).artifacts[matrix.triple.runs-on] }}
+          path: .yara
 
       - name: Setup Rust
         run: |
@@ -142,6 +118,6 @@ jobs:
       - name: Run tests
         env:
           RUST_BACKTRACE: full
-          YARA_INCLUDE_DIR: ${{ github.workspace }}/.yara/include
-          YARA_LIBRARY_PATH: ${{ github.workspace }}/.yara/lib
+          YARA_INCLUDE_DIR: ${{ github.workspace }}/.yara/${{ needs.yara-test.outputs.include-dir }}
+          YARA_LIBRARY_PATH: ${{ github.workspace }}/.yara/${{ needs.yara-test.outputs.library-path }}
         run: cargo test --no-fail-fast
