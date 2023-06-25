@@ -1,4 +1,4 @@
-name: "Rust CI"
+name: Rust CI
 
 on:
   push:
@@ -8,31 +8,116 @@ on:
 
 jobs:
   lint:
-    uses: darbiadev/.github/.github/workflows/rust-lint.yaml@44a991d8ab123fbc370aa7aaae25907f38f4fc1b
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@c85c95e3d7251135ab7dc9ce3241c5835cc595a9 # v3.5.3
+
+      - name: Setup Rust
+        run: |
+          rustup toolchain install stable --no-self-update --profile minimal --component rustfmt
+          rustup default stable
+
+      - name: Run Clippy
+        run: cargo fmt --all --check
+
+  yara:
+    needs: lint
+
+    uses: ./.github/workflows/yara.yaml
+    with:
+      runs-on: ubuntu-22.04
 
   clippy:
-    needs: lint
-    uses: darbiadev/.github/.github/workflows/rust-clippy.yaml@44a991d8ab123fbc370aa7aaae25907f38f4fc1b
+    needs: yara
+
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@c85c95e3d7251135ab7dc9ce3241c5835cc595a9 # v3.5.3
+
+      - name: Download YARA
+        uses: actions/download-artifact@9bc31d5ccc31df68ecc42ccf4149144866c47d8a # v3.0.2
+        with:
+          name: ${{ needs.yara.outputs.artifacts }}
+          path: .yara
+
+      - name: Setup Rust
+        run: |
+          rustup toolchain install stable --no-self-update --profile minimal --component clippy
+          rustup default stable
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@2656b87321093db1cb55fbd73183d195214fdfd1 # v2.5.0
+        with:
+          key: x86_64-unknown-linux-gnu
+
+      - name: Run Clippy
+        env:
+          YARA_INCLUDE_DIR: ${{ github.workspace }}/.yara/${{ needs.yara.outputs.include-dir }}
+          YARA_LIBRARY_PATH: ${{ github.workspace }}/.yara/${{ needs.yara.outputs.library-path }}
+        run: cargo clippy -- -D clippy::all -D clippy::pedantic -D clippy::cargo -A clippy::cargo_common_metadata
+
+  yara-test:
+    needs: clippy
+
+    strategy:
+      fail-fast: true
+      matrix:
+        runs-on:
+          - ubuntu-22.04
+
+    uses: ./.github/workflows/yara.yaml
+    with:
+      runs-on: ${{ matrix.runs-on }}
+
+  yara-test-output:
+    needs: yara-test
+
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Read Matrix Output
+        id: read
+        uses: cloudposse/github-action-matrix-outputs-read@main
+        with:
+          matrix-step-name: yara
+
+    outputs:
+      result: ${{ steps.read.outputs.result }}
 
   test:
-    needs: clippy
+    needs: [yara-test, yara-test-output]
+
     strategy:
       matrix:
         triple:
-          - {
-            os: "ubuntu-latest",
-            target: "x86_64-unknown-linux-gnu",
-          }
-          - {
-            os: "macOS-latest",
-            target: "x86_64-apple-darwin",
-          }
-          - {
-            os: "windows-latest",
-            target: "x86_64-pc-windows-msvc",
-          }
+          - runs-on: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
 
-    uses: darbiadev/.github/.github/workflows/rust-test.yaml@44a991d8ab123fbc370aa7aaae25907f38f4fc1b
-    with:
-      os: ${{ matrix.triple.os }}
-      target: ${{ matrix.triple.target }}
+    runs-on: ${{ matrix.triple.runs-on }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@c85c95e3d7251135ab7dc9ce3241c5835cc595a9 # v3.5.3
+
+      - name: Download YARA
+        uses: actions/download-artifact@9bc31d5ccc31df68ecc42ccf4149144866c47d8a # v3.0.2
+        with:
+          name: ${{ fromJson(needs.yara-test-output.outputs.result).artifacts[matrix.triple.runs-on] }}
+          path: .yara
+
+      - name: Setup Rust
+        run: |
+          rustup toolchain install stable --no-self-update --profile minimal
+          rustup default stable
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@2656b87321093db1cb55fbd73183d195214fdfd1 # v2.5.0
+        with:
+          key: ${{ matrix.triple.target }}
+
+      - name: Run tests
+        env:
+          RUST_BACKTRACE: full
+          YARA_INCLUDE_DIR: ${{ github.workspace }}/.yara/${{ needs.yara-test.outputs.include-dir }}
+          YARA_LIBRARY_PATH: ${{ github.workspace }}/.yara/${{ needs.yara-test.outputs.library-path }}
+        run: cargo test --no-fail-fast
