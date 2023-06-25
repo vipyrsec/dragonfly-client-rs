@@ -75,6 +75,7 @@ jobs:
           platforms: ${{ matrix.platform }}
           push: true
           tags: ${{ steps.docker_meta.outputs.tags }}
+          file: Containerfile
 
       # Sign the resulting Docker image digest.
       # This will only write to the public Rekor transparency log when the Docker repository is public to avoid leaking
