@@ -15,6 +15,7 @@ jobs:
 
       - name: Setup Rust
         run: |
+          set -e
           rustup toolchain install stable --no-self-update --profile minimal --component rustfmt
           rustup default stable
 
@@ -44,6 +45,7 @@ jobs:
 
       - name: Setup Rust
         run: |
+          set -e
           rustup toolchain install stable --no-self-update --profile minimal --component clippy
           rustup default stable
 
@@ -107,6 +109,7 @@ jobs:
 
       - name: Setup Rust
         run: |
+          set -e
           rustup toolchain install stable --no-self-update --profile minimal
           rustup default stable
 

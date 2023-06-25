@@ -112,15 +112,15 @@ fn runner(client: &DragonflyClient, job: &Job) -> Result<(), DragonflyError> {
 #[derive(Deserialize, Serialize)]
 pub struct AppConfig {
     pub base_url: String,
-    pub threads: usize,
-    pub wait_duration: u64,
     pub auth0_domain: String,
-    pub client_id: String,
-    pub client_secret: String,
     pub audience: String,
     pub grant_type: String,
+    pub client_id: String,
+    pub client_secret: String,
     pub username: String,
     pub password: String,
+    pub threads: usize,
+    pub wait_duration: u64,
 }
 
 impl Default for AppConfig {

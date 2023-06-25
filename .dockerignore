@@ -1,0 +1,8 @@
+# Ignore everything...
+*
+
+# ...except what we need
+!/.cargo/
+!/Cargo.toml
+!/Cargo.lock
+!/src/

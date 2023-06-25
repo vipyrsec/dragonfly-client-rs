@@ -1,5 +1,5 @@
 [package]
-name = "dragonfly-rs"
+name = "dragonfly-client-rs"
 version = "0.1.0"
 edition = "2021"
 
