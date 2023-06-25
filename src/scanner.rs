@@ -182,7 +182,7 @@ pub fn scan_tarball(
                     if filetypes.is_empty() {
                         true
                     } else {
-                        filetypes.iter().any(|filetype| path.ends_with(filetype))
+                        filetypes.iter().any(|filetype| path.to_string_lossy().ends_with(filetype))
                     }
                 })
                 .map(|rule| RuleScore {
