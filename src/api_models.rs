@@ -1,6 +1,6 @@
 use serde::Serialize;
 use serde::{self, Deserialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 #[derive(Debug, Serialize)]
 pub struct SubmitJobResultsBody<'a> {
@@ -8,7 +8,7 @@ pub struct SubmitJobResultsBody<'a> {
     pub version: &'a str,
     pub score: i64,
     pub inspector_url: Option<&'a str>,
-    pub rules_matched: &'a HashSet<&'a str>,
+    pub rules_matched: &'a Vec<&'a str>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -48,3 +48,4 @@ pub struct AuthBody<'a> {
     pub username: &'a String,
     pub password: &'a String,
 }
+

@@ -1,2 +1,5 @@
 [registries.crates-io]
 protocol = "sparse"
+
+[build]
+rustflags = ["-L/usr/local/lib"]

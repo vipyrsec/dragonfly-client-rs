@@ -2,160 +2,107 @@ mod api;
 mod api_models;
 mod error;
 mod scanner;
+mod app_config;
+mod utils;
+mod common;
 
-use std::{path::Path, sync::Arc, thread, time::Duration};
+use std::{sync::Arc, thread, time::Duration};
 
 use api::DragonflyClient;
 use api_models::Job;
-use config::Config;
+use common::{TarballType, ZipType};
 use error::DragonflyError;
-use reqwest::StatusCode;
-use scanner::{scan_distribution, DistributionScanResults};
-use serde::Deserialize;
+use reqwest::{StatusCode, blocking::Client, Url};
+use scanner::{DistributionScanResults, scan_tarball, scan_zip};
 use threadpool::ThreadPool;
-use tracing::{error, info, span, warn, Level};
+use tracing::{error, info, span, Level};
+use yara::Rules;
 
-use crate::api_models::SubmitJobResultsBody;
+use crate::{
+    api::{ fetch_tarball, fetch_zipfile }, 
+    utils::create_inspector_url, common::APP_CONFIG
+};
 
-fn create_inspector_url(name: &str, version: &str, download_url: &str, path: &Path) -> String {
-    let mut url = reqwest::Url::parse(download_url).unwrap();
-    let new_path = format!(
-        "project/{}/{}/{}/{}",
-        name,
-        version,
-        url.path().strip_prefix('/').unwrap(),
-        path.display()
-    );
-
-    url.set_host(Some("inspector.pypi.io")).unwrap();
-    url.set_path(&new_path);
-
-    url.into()
+enum Distribution {
+    Tar {
+        file: TarballType, 
+        inspector_url: Url,
+    },
+    
+    Zip {
+        file: ZipType,
+        inspector_url: Url,
+    }
 }
 
-fn do_job(client: &DragonflyClient, job: &Job) -> Result<(), DragonflyError> {
-    let mut distribution_results: Vec<DistributionScanResults> = Vec::new();
-    for download_url in &job.distributions {
-        let result = scan_distribution(client, download_url)?;
-        distribution_results.push(result);
-    }
+impl Distribution {
+    /// Scan this distribution against the given rules
+    fn scan(&self, rules: &Rules) -> Result<DistributionScanResults, DragonflyError> {
+        match self {
+            Self::Tar { file, inspector_url } => 
+                scan_tarball(file, rules).map(|files| DistributionScanResults::new(files, inspector_url.to_owned())), 
 
-    let highest_score_distribution = distribution_results
-        .iter()
-        .max_by_key(|distrib| distrib.get_total_score())
-        .unwrap();
-
-    let inspector_url =
-        if let Some(most_malicious_file) = &highest_score_distribution.get_most_malicious_file() {
-            let url = create_inspector_url(
-                &job.name,
-                &job.version,
-                highest_score_distribution.download_url(),
-                &most_malicious_file.path,
-            );
-
-            Some(url)
-        } else {
-            None
-        };
-
-    let score = if inspector_url.is_some() {
-        highest_score_distribution.get_total_score()
-    } else {
-        0
-    };
-    let inspector_url = inspector_url.as_deref();
-    let rules_matched = &highest_score_distribution.get_all_rules();
-
-    info!(
-        "
-Score: {score}
-inspector_url: {inspector_url:#?}
-rules_matched: {rules_matched:#?}
-    "
-    );
-
-    let body = SubmitJobResultsBody {
-        name: &job.name,
-        version: &job.version,
-        score,
-        inspector_url,
-        rules_matched,
-    };
-
-    info!("{rules_matched:#?}");
-    // We perform this validation here instead of upstream (i.e in runner) because
-    // here, we only have to re-send the HTTP request with the same results
-    // If we did it upstream (i.e in runner), we'd need to run the whole scanning process again
-    if let Err(err) = client.submit_job_results(&body) {
-        if let Some(StatusCode::UNAUTHORIZED) = err.status() {
-            info!(
-                "Got 401 UNAUTHORIZED while trying to send results upstream, revalidating creds..."
-            );
-            client.reauthorize()?;
-            info!("Successfully reauthorized! Sending results again...");
-            client.submit_job_results(&body)?;
-            info!("Successfully sent results!");
+            Self::Zip { file, inspector_url } => 
+                scan_zip(file, rules).map(|files| DistributionScanResults::new(files, inspector_url.to_owned())),
         }
     }
+}
 
-    Ok(())
+/// Scan all the distributions of the given job against the given ruleset, returning the
+/// results of each distribution. Uses the provided HTTP client to download each
+/// distribution
+fn scan_all_distributions<'a>(http_client: &Client, rules: &Rules, job: &'a Job) -> Result<Vec<DistributionScanResults>, DragonflyError> {
+    let mut distribution_scan_results = Vec::new();
+    for distribution in &job.distributions {
+
+        let download_url: Url = distribution.parse().unwrap();
+        let inspector_url = create_inspector_url(&job.name, &job.version, &download_url);
+
+        let dist = if distribution.ends_with(".tar.gz") { 
+            let file = fetch_tarball(http_client, &download_url)?;
+            Distribution::Tar { file, inspector_url }
+        } else {
+            let file = fetch_zipfile(http_client, &download_url)?;
+            Distribution::Zip { file, inspector_url }
+        };
+        
+        let distribution_scan_result = dist.scan(rules)?;
+        distribution_scan_results.push(distribution_scan_result);
+    }
+
+    Ok(distribution_scan_results)
+
 }
 
 fn runner(client: &DragonflyClient, job: &Job) -> Result<(), DragonflyError> {
     info!("Starting job {}@{}", job.name, job.version);
 
-    // Control when the MutexGuard is dropped
-    {
-        let mut state = client.state.lock().unwrap();
-        if state.hash != job.hash {
-            info!("Local hash: {}, remote hash: {}", state.hash, job.hash);
-            info!("State is behind, syncing...");
-            let (hash, rules) = client.fetch_rules()?;
-            info!("Successfully synced state, we are now on hash {hash}");
-
-            state.set_hash(hash);
-            state.set_rules(rules);
-        }
+    let state = client.state.lock().unwrap();
+    if state.hash != job.hash {
+        info!("Local hash: {}, remote hash: {}", state.hash, job.hash);
+        info!("State is behind, syncing...");
+        client.reauthorize()?;
+        info!("Successfully synced state!");
+    }
+    
+    let distribution_scan_results = scan_all_distributions(client.get_http_client(), &state.rules, job)?;
+    if let Err(Some(StatusCode::UNAUTHORIZED)) =  client.submit_job_results(job, &distribution_scan_results).map_err(|err| err.status()) {
+        info!("Got 401 unauthorized while submitting job, reauthorizing and trying again") ;
+        client.reauthorize()?;
+        info!("Successfully reauthorized! Sending results again...");
+        client.submit_job_results(&job, &distribution_scan_results)?;
+        info!("Successfully sent results upstream");
     }
 
-    do_job(client, job)?;
-    info!("Successfully sent results upstream");
 
     Ok(())
 }
 
-#[derive(Deserialize)]
-pub struct AppConfig {
-    pub base_url: String,
-    pub threads: usize,
-    pub wait_duration: u64,
-    pub auth0_domain: String,
-    pub client_id: String,
-    pub client_secret: String,
-    pub audience: String,
-    pub grant_type: String,
-    pub username: String,
-    pub password: String,
-}
-
 fn main() -> Result<(), DragonflyError> {
-    let config: AppConfig = Config::builder()
-        .add_source(config::File::with_name("Config.toml").required(false))
-        .add_source(config::Environment::default())
-        .set_default("base_url", "https://dragonfly.vipyrsec.com")?
-        .set_default("threads", 1)?
-        .set_default("auth0_domain", "vipyrsec.us.auth0.com")?
-        .set_default("audience", "https://dragonfly.vipyrsec.com")?
-        .set_default("grant_type", "password")?
-        .set_default("wait_duration", 60u64)?
-        .build()?
-        .try_deserialize()?;
-
     tracing_subscriber::fmt().init();
-    let client = Arc::new(DragonflyClient::new(config)?);
+    let client = Arc::new(DragonflyClient::new()?);
 
-    let n_jobs = client.config.threads;
+    let n_jobs = APP_CONFIG.threads;
     let pool = ThreadPool::new(n_jobs);
     info!("Started threadpool with {} workers", n_jobs);
 
@@ -175,7 +122,7 @@ fn main() -> Result<(), DragonflyError> {
                 },
 
                 Ok(None) => {
-                    let s = client.config.wait_duration;
+                    let s = APP_CONFIG.wait_duration;
                     info!("No job found! Trying again in {s} seconds...");
                     thread::sleep(Duration::from_secs(s));
                 },

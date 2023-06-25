@@ -1,0 +1,89 @@
+
+impl Job {
+    fn do_job(&self, http_client: &Client, rules: &Rules) -> Result<(), DragonflyError> {
+        let mut distribution_results: Vec<DistributionScanResults> = Vec::new();
+        for download_url in &self.distributions {
+            if download_url.ends_with(".tar.gz") {
+                   
+            } else {
+
+            }
+        }
+
+        let highest_score_distribution = distribution_results
+            .iter()
+            .max_by_key(|distrib| distrib.get_total_score())
+            .unwrap();
+
+        let inspector_url =
+            if let Some(most_malicious_file) = &highest_score_distribution.get_most_malicious_file() {
+                let url = create_inspector_url(
+                    &self.name,
+                    &self.version,
+                    highest_score_distribution.download_url(),
+                    &most_malicious_file.path,
+                );
+
+                Some(url)
+            } else {
+                None
+            };
+
+        let score = if inspector_url.is_some() {
+            highest_score_distribution.get_total_score()
+        } else {
+            0
+        };
+        let inspector_url = inspector_url.as_deref();
+        let rules_matched = &highest_score_distribution.get_all_rules();
+
+        info!(
+            "
+    Score: {score}
+    inspector_url: {inspector_url:#?}
+    rules_matched: {rules_matched:#?}
+        "
+        );
+
+        let body = SubmitJobResultsBody {
+            name: &job.name,
+            version: &job.version,
+            score,
+            inspector_url,
+            rules_matched,
+        };
+
+        // We perform this validation here instead of upstream (i.e in runner) because
+        // here, we only have to re-send the HTTP request with the same results
+        // If we did it upstream (i.e in runner), we'd need to run the whole scanning process again
+        if let Err(err) = client.submit_job_results(&body) {
+            if let Some(StatusCode::UNAUTHORIZED) = err.status() {
+                info!(
+                    "Got 401 UNAUTHORIZED while trying to send results upstream, revalidating creds..."
+                );
+                client.reauthorize()?; // If there's an error the 2nd time just propagate it up
+                info!("Successfully reauthorized! Sending results again...");
+                client.submit_job_results(&body)?;
+                info!("Successfully sent results!");
+            }
+        }
+
+        Ok(())
+    }
+}
+
+
+    // We perform this validation here instead of upstream (i.e in runner) because
+    // here, we only have to re-send the HTTP request with the same results
+    // If we did it upstream (i.e in runner), we'd need to run the whole scanning process again
+    if let Err(err) = client.submit_job_results(&body) {
+        if let Some(StatusCode::UNAUTHORIZED) = err.status() {
+            info!(
+                "Got 401 UNAUTHORIZED while trying to send results upstream, revalidating creds..."
+            );
+            client.reauthorize()?; // If there's an error the 2nd time just propagate it up
+            info!("Successfully reauthorized! Sending results again...");
+            client.submit_job_results(&body)?;
+            info!("Successfully sent results!");
+        }
+    }

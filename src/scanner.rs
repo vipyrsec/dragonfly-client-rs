@@ -1,20 +1,28 @@
 use std::{
     collections::HashSet,
-    io::{Cursor, Read},
+    io::Read,
     path::PathBuf,
 };
 
+use reqwest::Url;
 use yara::{MetadataValue, Rule, Rules};
-use zip::ZipArchive;
 
-use crate::{api::DragonflyClient, error::DragonflyError};
+use crate::{error::DragonflyError, common::{ZipType, TarballType}};
+
 
 #[derive(Debug, Hash, Eq, PartialEq)]
 pub struct RuleScore {
-    pub rule_name: String,
+    pub name: String,
     pub score: Option<i64>,
 }
 
+impl RuleScore {
+    pub fn new(name: String, score: Option<i64>) -> Self {
+        Self { name, score }
+    }
+}
+
+/// The results of scanning a single file. Contains the file path and the rules it matched
 #[derive(Debug)]
 pub struct FileScanResult {
     pub path: PathBuf,
@@ -22,24 +30,43 @@ pub struct FileScanResult {
 }
 
 impl FileScanResult {
+    fn new(path: PathBuf, rules: Vec<RuleScore>) -> Self {
+        Self { path, rules }
+    }
+    
+    /// Calculate the "maliciousness" index of this file
     fn calculate_score(&self) -> i64 {
         self.rules.iter().map(|i| i.score.unwrap_or(0)).sum()
     }
 }
 
+/// Struct representing the results of a scanned distribution
 pub struct DistributionScanResults {
-    download_url: String,
+    /// The scan results for each file in this distribution
     file_scan_results: Vec<FileScanResult>,
+
+    /// The inspector URL pointing to this distribution's base
+    inspector_url: Url,
 }
 
 impl DistributionScanResults {
+    
+    /// Create a new DistributionScanResults based off the results of it's files and the base
+    /// inspector URL
+    pub fn new(file_scan_results: Vec<FileScanResult>, inspector_url: Url) -> Self {
+        Self { file_scan_results, inspector_url }
+    }
+    
+    /// Get the "most malicious file" in the distribution. This is calculated based off the file 
+    /// with the highest score in this distribution 
     pub fn get_most_malicious_file(&self) -> Option<&FileScanResult> {
         self.file_scan_results
             .iter()
             .max_by_key(|i| i.calculate_score())
     }
-
-    pub fn get_total_score(&self) -> i64 {
+    
+    /// Get all **unique** RuleScore objects that were matched for this distribution
+    fn get_matched_rules(&self) -> HashSet<&RuleScore> {
         let mut rules: HashSet<&RuleScore> = HashSet::new();
         for file_scan_result in &self.file_scan_results {
             for rule in &file_scan_result.rules {
@@ -47,154 +74,122 @@ impl DistributionScanResults {
             }
         }
 
-        rules.iter().map(|i| i.score.unwrap_or(0)).sum()
+        rules
+    }
+    
+    /// Calculate the total score of this distribution, without counting duplicates twice
+    pub fn get_total_score(&self) -> i64 {
+        self.get_matched_rules().iter().map(|rule| rule.score.unwrap_or(0)).sum()
+    }
+    
+    /// Get a vector over the identifiers of the all **unique** rules this distribution matched
+    pub fn get_matched_rule_identifiers(&self) -> Vec<&str> {
+        self.get_matched_rules().iter().map(|rule| rule.name.as_str()).collect()
     }
 
-    pub fn get_all_rules(&self) -> HashSet<&str> {
-        let mut rule_names: HashSet<&str> = HashSet::new();
+    pub fn inspector_url(&self) -> &Url {
+        &self.inspector_url
+    }
+}
 
-        for file_scan_result in &self.file_scan_results {
-            for rule in &file_scan_result.rules {
-                rule_names.insert(&rule.rule_name);
-            }
+trait RuleExt<'a> {
+
+    /// Get the value of a metadata by key. `None` if that key/value pair doesn't exist
+    fn get_metadata_value(&'a self, key: &str) -> Option<&'a MetadataValue>;
+
+    /// Get a vector over the `filetype` metadata value. None if none are defined.
+    fn get_rule_weight(&'a self) -> Option<i64>;
+
+    /// Get the weight of this rule. None if not defined.
+    fn get_filetypes(&'a self) -> Option<Vec<&'a str>>;
+
+}
+
+impl<'a> RuleExt<'a> for Rule<'a> {
+    fn get_metadata_value(&self, key: &str) -> Option<&'a MetadataValue> {
+        self
+            .metadatas
+            .iter()
+            .find(|metadata| metadata.identifier == key)
+            .map(|metadata| &metadata.value)
+    }
+    
+    fn get_filetypes(&'a self) -> Option<Vec<&'a str>> {
+        if let Some(MetadataValue::String(string)) = self.get_metadata_value("filetype") {
+            Some(string.split(' ').collect())
+        } else {
+            None 
         }
-
-        rule_names
     }
+    
 
-    pub fn download_url(&self) -> &String {
-        &self.download_url
-    }
-}
-
-pub fn scan_distribution(
-    client: &DragonflyClient,
-    download_url: &String,
-) -> Result<DistributionScanResults, DragonflyError> {
-    if download_url.ends_with("tar.gz") {
-        let mut tar = client.fetch_tarball(download_url)?;
-        let rules = { &client.state.lock().unwrap().rules };
-        scan_tarball(&mut tar, download_url, rules)
-    } else {
-        let mut zip = client.fetch_zipfile(download_url)?;
-        let rules = { &client.state.lock().unwrap().rules };
-        scan_zipfile(&mut zip, download_url, rules)
-    }
-}
-
-fn get_rule_score(rule: &Rule) -> Option<i64> {
-    let m = rule
-        .metadatas
-        .iter()
-        .find(|metadata| metadata.identifier == "weight");
-
-    if let Some(metadata) = m {
-        match metadata.value {
-            MetadataValue::Integer(integer) => Some(integer),
-            _ => None,
+    fn get_rule_weight(&self) -> Option<i64> {
+        if let Some(MetadataValue::Integer(integer)) = self.get_metadata_value("weight") {
+            Some(*integer)
+        } else {
+            None
         }
-    } else {
-        None
     }
 }
 
-fn get_filetypes<'a>(rule: &'a Rule) -> Vec<&'a str> {
-    let m = rule
-        .metadatas
-        .iter()
-        .find(|metadata| metadata.identifier == "filetype")
-        .map(|metadata| &metadata.value);
-
-    if let Some(MetadataValue::String(string)) = m {
-        string.split(' ').collect()
-    } else {
-        Vec::new()
+impl From<Rule<'_>> for RuleScore {
+    fn from(rule: Rule) -> Self {
+        Self {
+            name: rule.identifier.to_owned(),
+            score: rule.get_rule_weight(),
+        }
     }
 }
 
-pub fn scan_zipfile(
-    zip: &mut ZipArchive<Cursor<Vec<u8>>>,
-    download_url: &str,
-    rules: &Rules,
-) -> Result<DistributionScanResults, DragonflyError> {
-    let mut file_scan_results: Vec<FileScanResult> = Vec::new();
-    let file_names: Vec<String> = zip
-        .file_names()
-        .map(std::borrow::ToOwned::to_owned)
+
+/// Scan a file given it implements Read. Also takes the path of the file and the rules to scan it
+/// against
+fn scan_file<T>(
+    file: &T, 
+    path: PathBuf, 
+    rules: &Rules
+) -> Result<FileScanResult, DragonflyError>
+    where T: Read
+{
+    let mut buffer = Vec::new();
+    file.read_to_end(&mut buffer)?;
+
+    let rules: Vec<RuleScore> = rules.scan_mem(&buffer, 10)?
+        .into_iter()
+        .filter(|rule| rule.get_filetypes().filter(|filetypes| filetypes.iter().any(|filetype| path.ends_with(filetype))).is_some())
+        .map(RuleScore::from)
         .collect();
-    for file_name in file_names {
-        let mut file = zip.by_name(&file_name)?;
-        let mut buffer = Vec::new();
-        file.read_to_end(&mut buffer)?;
-
-        let rules_matched = rules.scan_mem(&buffer, 10)?;
-
-        file_scan_results.push(FileScanResult {
-            path: PathBuf::from(&file_name),
-            rules: rules_matched
-                .into_iter()
-                .filter(|rule| {
-                    let filetypes = get_filetypes(rule);
-                    if filetypes.is_empty() {
-                        true
-                    } else {
-                        filetypes
-                            .iter()
-                            .any(|filetype| file_name.ends_with(filetype))
-                    }
-                })
-                .map(|rule| RuleScore {
-                    rule_name: rule.identifier.to_owned(),
-                    score: get_rule_score(&rule),
-                })
-                .collect(),
-        });
-    }
-
-    Ok(DistributionScanResults {
-        file_scan_results,
-        download_url: download_url.to_owned(),
-    })
+    
+    Ok(FileScanResult::new(path.to_path_buf(), rules))
 }
 
-pub fn scan_tarball(
-    tar: &mut tar::Archive<Cursor<Vec<u8>>>,
-    download_url: &str,
+/// Scan a zipfile against the given rule set
+pub fn scan_zip(
+    zip: &ZipType,
     rules: &Rules,
-) -> Result<DistributionScanResults, DragonflyError> {
-    let mut file_scan_results: Vec<FileScanResult> = Vec::new();
+) -> Result<Vec<FileScanResult>, DragonflyError> {
 
-    for entry in tar.entries()? {
-        let mut entry = entry?;
-
-        let mut buffer = Vec::new();
-        entry.read_to_end(&mut buffer)?;
-
-        let rules_matched = rules.scan_mem(&buffer, 10)?;
-        let path = entry.path()?;
-
-        file_scan_results.push(FileScanResult {
-            path: path.to_path_buf(),
-            rules: rules_matched
-                .into_iter()
-                .filter(|rule| {
-                    let filetypes = get_filetypes(rule);
-                    if filetypes.is_empty() {
-                        true
-                    } else {
-                        filetypes.iter().any(|filetype| path.ends_with(filetype))
-                    }
-                })
-                .map(|rule| RuleScore {
-                    rule_name: rule.identifier.to_owned(),
-                    score: get_rule_score(&rule),
-                })
-                .collect(),
-        });
+    let mut file_scan_results = Vec::new();
+    for file_name in zip.file_names() {
+        let file = zip.by_name(file_name)?;
+        let path = PathBuf::from(file_name);
+        let scan_results = scan_file(&file, path, rules)?;
+        file_scan_results.push(scan_results);
     }
+    
+    Ok(file_scan_results)
+}
 
-    Ok(DistributionScanResults {
-        file_scan_results,
-        download_url: download_url.to_string(),
-    })
+/// Scan a tarball against the given rule set
+pub fn scan_tarball(
+    tar: &TarballType,
+    rules: &Rules,
+) -> Result<Vec<FileScanResult>, DragonflyError> {
+    let mut file_scan_results = tar.entries()?
+        .filter_map(Result::ok)
+        .map(|tarfile| scan_file(&tarfile, tarfile.path()?.to_path_buf(), rules))
+        .filter_map(Result::ok)
+        .collect();
+    
+    Ok(file_scan_results)
 }
