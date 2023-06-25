@@ -1,3 +1,5 @@
+name: YARA
+
 on:
   workflow_call:
     inputs:
