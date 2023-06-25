@@ -83,6 +83,7 @@ rules_matched: {rules_matched:#?}
         rules_matched,
     };
 
+    info!("{rules_matched:#?}");
     // We perform this validation here instead of upstream (i.e in runner) because
     // here, we only have to re-send the HTTP request with the same results
     // If we did it upstream (i.e in runner), we'd need to run the whole scanning process again
