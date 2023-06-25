@@ -1,4 +1,4 @@
-name: Docker Build and Push
+name: Container Build and Push
 
 on:
   workflow_dispatch:
@@ -71,6 +71,7 @@ jobs:
         with:
           cache-from: type=gha,scope=${{ matrix.platform }}
           cache-to: type=gha,mode=max,scope=${{ matrix.platform }}
+          file: Containerfile
           labels: ${{ steps.docker_meta.outputs.labels }}
           platforms: ${{ matrix.platform }}
           push: true
