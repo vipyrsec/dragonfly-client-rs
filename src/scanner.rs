@@ -1,15 +1,13 @@
 use std::{
     collections::HashSet,
-    io::{Read, Cursor},
+    io::Read,
     path::PathBuf,
 };
 
-use reqwest::Url;
-use tar::Entry;
+use reqwest::{Url, blocking::Client};
 use yara::{MetadataValue, Rule, Rules};
-use zip::read::ZipFile;
 
-use crate::{error::DragonflyError, common::{ZipType, TarballType}};
+use crate::{error::DragonflyError, common::{ZipType, TarballType}, utils::create_inspector_url, api_models::Job, api::{fetch_tarball, fetch_zipfile}};
 
 
 #[derive(Debug, Hash, Eq, PartialEq)]
@@ -39,6 +37,31 @@ impl FileScanResult {
     /// Calculate the "maliciousness" index of this file
     fn calculate_score(&self) -> i64 {
         self.rules.iter().map(|i| i.score.unwrap_or(0)).sum()
+    }
+}
+
+enum Distribution {
+    Tar {
+        file: TarballType, 
+        inspector_url: Url,
+    },
+    
+    Zip {
+        file: ZipType,
+        inspector_url: Url,
+    }
+}
+
+impl Distribution {
+    /// Scan this distribution against the given rules
+    fn scan(&mut self, rules: &Rules) -> Result<DistributionScanResults, DragonflyError> {
+        match self {
+            Self::Tar { file, inspector_url } => 
+                scan_tarball(file, rules).map(|files| DistributionScanResults::new(files, inspector_url.to_owned())), 
+
+            Self::Zip { file, inspector_url } => 
+                scan_zip(file, rules).map(|files| DistributionScanResults::new(files, inspector_url.to_owned())),
+        }
     }
 }
 
@@ -195,4 +218,31 @@ pub fn scan_tarball(
         .collect();
     
     Ok(file_scan_results)
+}
+
+
+
+/// Scan all the distributions of the given job against the given ruleset, returning the
+/// results of each distribution. Uses the provided HTTP client to download each
+/// distribution
+pub fn scan_all_distributions<'a>(http_client: &Client, rules: &Rules, job: &'a Job) -> Result<Vec<DistributionScanResults>, DragonflyError> {
+    let mut distribution_scan_results = Vec::new();
+    for distribution in &job.distributions {
+        let download_url: Url = distribution.parse().unwrap();
+        let inspector_url = create_inspector_url(&job.name, &job.version, &download_url);
+
+        let mut dist = if distribution.ends_with(".tar.gz") { 
+            let file = fetch_tarball(http_client, &download_url)?;
+            Distribution::Tar { file, inspector_url }
+        } else {
+            let file = fetch_zipfile(http_client, &download_url)?;
+            Distribution::Zip { file, inspector_url }
+        };
+        
+        let distribution_scan_result = dist.scan(rules)?;
+        distribution_scan_results.push(distribution_scan_result);
+    }
+
+    Ok(distribution_scan_results)
+
 }

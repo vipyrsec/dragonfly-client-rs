@@ -1,7 +1,7 @@
 mod api;
 mod api_models;
 mod error;
-mod scanner;
+pub mod scanner;
 mod app_config;
 mod utils;
 mod common;
@@ -10,68 +10,12 @@ use std::{sync::Arc, thread, time::Duration};
 
 use api::DragonflyClient;
 use api_models::Job;
-use common::{TarballType, ZipType};
 use error::DragonflyError;
-use reqwest::{StatusCode, blocking::Client, Url};
-use scanner::{DistributionScanResults, scan_tarball, scan_zip};
+use reqwest::StatusCode;
 use threadpool::ThreadPool;
 use tracing::{error, info, span, Level};
-use yara::Rules;
 
-use crate::{
-    api::{ fetch_tarball, fetch_zipfile }, 
-    utils::create_inspector_url, common::APP_CONFIG
-};
-
-enum Distribution {
-    Tar {
-        file: TarballType, 
-        inspector_url: Url,
-    },
-    
-    Zip {
-        file: ZipType,
-        inspector_url: Url,
-    }
-}
-
-impl Distribution {
-    /// Scan this distribution against the given rules
-    fn scan(&mut self, rules: &Rules) -> Result<DistributionScanResults, DragonflyError> {
-        match self {
-            Self::Tar { file, inspector_url } => 
-                scan_tarball(file, rules).map(|files| DistributionScanResults::new(files, inspector_url.to_owned())), 
-
-            Self::Zip { file, inspector_url } => 
-                scan_zip(file, rules).map(|files| DistributionScanResults::new(files, inspector_url.to_owned())),
-        }
-    }
-}
-
-/// Scan all the distributions of the given job against the given ruleset, returning the
-/// results of each distribution. Uses the provided HTTP client to download each
-/// distribution
-fn scan_all_distributions<'a>(http_client: &Client, rules: &Rules, job: &'a Job) -> Result<Vec<DistributionScanResults>, DragonflyError> {
-    let mut distribution_scan_results = Vec::new();
-    for distribution in &job.distributions {
-        let download_url: Url = distribution.parse().unwrap();
-        let inspector_url = create_inspector_url(&job.name, &job.version, &download_url);
-
-        let mut dist = if distribution.ends_with(".tar.gz") { 
-            let file = fetch_tarball(http_client, &download_url)?;
-            Distribution::Tar { file, inspector_url }
-        } else {
-            let file = fetch_zipfile(http_client, &download_url)?;
-            Distribution::Zip { file, inspector_url }
-        };
-        
-        let distribution_scan_result = dist.scan(rules)?;
-        distribution_scan_results.push(distribution_scan_result);
-    }
-
-    Ok(distribution_scan_results)
-
-}
+use crate::{common::APP_CONFIG, scanner::scan_all_distributions};
 
 fn runner(client: &DragonflyClient, job: &Job) -> Result<(), DragonflyError> {
     info!("Starting job {}@{}", job.name, job.version);
