@@ -37,7 +37,7 @@ enum Distribution {
 
 impl Distribution {
     /// Scan this distribution against the given rules
-    fn scan(&self, rules: &Rules) -> Result<DistributionScanResults, DragonflyError> {
+    fn scan(&mut self, rules: &Rules) -> Result<DistributionScanResults, DragonflyError> {
         match self {
             Self::Tar { file, inspector_url } => 
                 scan_tarball(file, rules).map(|files| DistributionScanResults::new(files, inspector_url.to_owned())), 
@@ -54,11 +54,10 @@ impl Distribution {
 fn scan_all_distributions<'a>(http_client: &Client, rules: &Rules, job: &'a Job) -> Result<Vec<DistributionScanResults>, DragonflyError> {
     let mut distribution_scan_results = Vec::new();
     for distribution in &job.distributions {
-
         let download_url: Url = distribution.parse().unwrap();
         let inspector_url = create_inspector_url(&job.name, &job.version, &download_url);
 
-        let dist = if distribution.ends_with(".tar.gz") { 
+        let mut dist = if distribution.ends_with(".tar.gz") { 
             let file = fetch_tarball(http_client, &download_url)?;
             Distribution::Tar { file, inspector_url }
         } else {
@@ -77,7 +76,7 @@ fn scan_all_distributions<'a>(http_client: &Client, rules: &Rules, job: &'a Job)
 fn runner(client: &DragonflyClient, job: &Job) -> Result<(), DragonflyError> {
     info!("Starting job {}@{}", job.name, job.version);
 
-    let state = client.state.lock().unwrap();
+    let state = client.state.read().unwrap();
     if state.hash != job.hash {
         info!("Local hash: {}, remote hash: {}", state.hash, job.hash);
         info!("State is behind, syncing...");
@@ -91,9 +90,9 @@ fn runner(client: &DragonflyClient, job: &Job) -> Result<(), DragonflyError> {
         client.reauthorize()?;
         info!("Successfully reauthorized! Sending results again...");
         client.submit_job_results(&job, &distribution_scan_results)?;
-        info!("Successfully sent results upstream");
     }
 
+    info!("Successfully sent results upstream");
 
     Ok(())
 }
@@ -117,7 +116,9 @@ fn main() -> Result<(), DragonflyError> {
                     let _enter = span.enter();
 
                     if let Err(err) = runner(&client, &job) {
-                        error!("Unexpected error: {err:#?}");
+                        let errstr = format!("{err:#?}");
+                        error!("Unexpected error: {errstr}");
+                        client.send_error(&job, &errstr).unwrap();
                     }
                 },
 

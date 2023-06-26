@@ -1,6 +1,6 @@
 use std::{
     io::{Cursor, Read},
-    sync::Mutex,
+    sync::{Mutex, RwLock},
 };
 use flate2::read::GzDecoder;
 use reqwest::{blocking::Client, Url};
@@ -8,7 +8,7 @@ use yara::{Compiler, Rules};
 use zip::ZipArchive;
 use crate::{
     APP_CONFIG, 
-    common::{TarballType, ZipType}, scanner::DistributionScanResults,
+    common::{TarballType, ZipType}, scanner::DistributionScanResults, api_models::SubmitJobResultsError,
 };
 
 use crate::{
@@ -22,8 +22,6 @@ use crate::{
     },
     error::DragonflyError,
 };
-
-const MAX_SIZE: usize = 250_000_000;
 
 /// Application state
 pub struct State {
@@ -40,7 +38,7 @@ pub struct State {
 
 pub struct DragonflyClient {
     pub client: Client,
-    pub state: Mutex<State>,
+    pub state: RwLock<State>,
 }
 
 impl DragonflyClient {
@@ -49,7 +47,7 @@ impl DragonflyClient {
 
         let access_token = Self::fetch_access_token(&client)?;
         let (hash, rules) = Self::get_rules(&client, &access_token)?;
-        let state: Mutex<State> = State { rules, hash, access_token }.into();
+        let state = State { rules, hash, access_token }.into();
 
         Ok(Self {
             client,
@@ -67,13 +65,13 @@ impl DragonflyClient {
     
     /// Fetch the latest ruleset and set it in state
     pub fn sync_rules(&self) -> Result<(), DragonflyError> {
-        let access_token = &self.state.lock().unwrap().access_token;
+        let access_token = &self.state.read().unwrap().access_token;
         let (hash, rules) = Self::get_rules(
             self.get_http_client(),
             access_token
         )?;
 
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.write().unwrap();
         state.hash = hash;
         state.rules = rules;
 
@@ -82,7 +80,7 @@ impl DragonflyClient {
     
     /// Fetch a job. None if the server has nothing for us to do.
     pub fn get_job(&self) -> reqwest::Result<Option<Job>> {
-        let access_token = &self.state.lock().unwrap().access_token;
+        let access_token = &self.state.read().unwrap().access_token;
         let res: GetJobResponse = self
             .client
             .post(format!("{}/job", APP_CONFIG.base_url))
@@ -98,11 +96,30 @@ impl DragonflyClient {
 
         Ok(job)
     }
+
+    pub fn send_error(&self, job: &Job, reason: &str) -> Result<(), reqwest::Error> {
+        let access_token = &self.state.read().unwrap().access_token; 
+
+        let body = SubmitJobResultsError {
+            name: &job.name,
+            version: &job.version,
+            reason,
+        };
+
+        self.client
+            .put(format!("{}/package", APP_CONFIG.base_url))
+            .header("Authorization", format!("Bearer {access_token}"))
+            .json(&body)
+            .send()?
+            .error_for_status()?;
+
+        Ok(())
+    }
     
     /// Submit the results of a scan to the server, given the job and the scan results of each
     /// distribution
     pub fn submit_job_results(&self, job: &Job, distribution_scan_results: &[DistributionScanResults]) -> reqwest::Result<()> {
-        let access_token = &self.state.lock().unwrap().access_token;
+        let access_token = &self.state.read().unwrap().access_token;
 
         let highest_score_distribution = distribution_scan_results 
             .iter()
@@ -136,7 +153,7 @@ impl DragonflyClient {
     }
 
     pub fn set_access_token(&self, access_token: String) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.write().unwrap();
         state.access_token = access_token;
     }
 
@@ -194,7 +211,7 @@ pub fn fetch_tarball(
     let mut cursor: Cursor<Vec<u8>> = Cursor::new(Vec::new());
     let read = decompressed.read_to_end(cursor.get_mut())?;
 
-    if read > MAX_SIZE {
+    if read > APP_CONFIG.max_scan_size {
         Err(DragonflyError::DownloadTooLarge(download_url.to_string()))
     } else {
         Ok(tar::Archive::new(cursor))
@@ -210,7 +227,7 @@ pub fn fetch_zipfile(
     let mut cursor = Cursor::new(Vec::new());
     let read = response.read_to_end(cursor.get_mut())?;
 
-    if read > MAX_SIZE {
+    if read > APP_CONFIG.max_scan_size {
         Err(DragonflyError::DownloadTooLarge(download_url.to_string()))
     } else {
         let zip = ZipArchive::new(cursor)?;

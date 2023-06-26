@@ -13,13 +13,14 @@ pub struct AppConfig {
     pub grant_type: String,
     pub username: String,
     pub password: String,
+    pub max_scan_size: usize,
 }
 
 impl AppConfig {
     pub fn build() -> Result<Self, ConfigError> {
         Config::builder()
-            .add_source(config::File::with_name("Config-dev.toml").required(false))
             .add_source(config::File::with_name("Config.toml").required(false))
+            .add_source(config::File::with_name("Config-dev.toml").required(false))
             .add_source(config::Environment::default())
             .set_default("base_url", "https://dragonfly.vipyrsec.com")?
             .set_default("threads", 1)?
@@ -27,6 +28,7 @@ impl AppConfig {
             .set_default("audience", "https://dragonfly.vipyrsec.com")?
             .set_default("grant_type", "password")?
             .set_default("wait_duration", 60u64)?
+            .set_default("max_scan_size", 2.56e+8)?
             .build()?
             .try_deserialize()
     }

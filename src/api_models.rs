@@ -11,6 +11,13 @@ pub struct SubmitJobResultsBody<'a> {
     pub rules_matched: &'a Vec<&'a str>,
 }
 
+#[derive(Debug, Serialize)]
+pub struct SubmitJobResultsError<'a> {
+    pub name: &'a str,
+    pub version: &'a str,
+    pub reason: &'a str,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct Job {
     pub hash: String,

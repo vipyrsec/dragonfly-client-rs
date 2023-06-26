@@ -1,11 +1,13 @@
 use std::{
     collections::HashSet,
-    io::Read,
+    io::{Read, Cursor},
     path::PathBuf,
 };
 
 use reqwest::Url;
+use tar::Entry;
 use yara::{MetadataValue, Rule, Rules};
+use zip::read::ZipFile;
 
 use crate::{error::DragonflyError, common::{ZipType, TarballType}};
 
@@ -41,6 +43,7 @@ impl FileScanResult {
 }
 
 /// Struct representing the results of a scanned distribution
+#[derive(Debug)]
 pub struct DistributionScanResults {
     /// The scan results for each file in this distribution
     file_scan_results: Vec<FileScanResult>,
@@ -144,13 +147,11 @@ impl From<Rule<'_>> for RuleScore {
 
 /// Scan a file given it implements Read. Also takes the path of the file and the rules to scan it
 /// against
-fn scan_file<T>(
-    file: &T, 
+fn scan_file(
+    file: &mut impl Read, 
     path: PathBuf, 
     rules: &Rules
-) -> Result<FileScanResult, DragonflyError>
-    where T: Read
-{
+) -> Result<FileScanResult, DragonflyError> {
     let mut buffer = Vec::new();
     file.read_to_end(&mut buffer)?;
 
@@ -165,29 +166,31 @@ fn scan_file<T>(
 
 /// Scan a zipfile against the given rule set
 pub fn scan_zip(
-    zip: &ZipType,
+    zip: &mut ZipType,
     rules: &Rules,
 ) -> Result<Vec<FileScanResult>, DragonflyError> {
-
     let mut file_scan_results = Vec::new();
-    for file_name in zip.file_names() {
-        let file = zip.by_name(file_name)?;
-        let path = PathBuf::from(file_name);
-        let scan_results = scan_file(&file, path, rules)?;
+    for idx in 0..zip.len() {
+        let mut file = zip.by_index(idx)?;
+        let path = PathBuf::from(file.name());
+        let scan_results = scan_file(&mut file, path, rules)?;
         file_scan_results.push(scan_results);
     }
-    
+
     Ok(file_scan_results)
 }
 
 /// Scan a tarball against the given rule set
 pub fn scan_tarball(
-    tar: &TarballType,
+    tar: &mut TarballType,
     rules: &Rules,
-) -> Result<Vec<FileScanResult>, DragonflyError> {
-    let mut file_scan_results = tar.entries()?
+    ) -> Result<Vec<FileScanResult>, DragonflyError> {
+    let file_scan_results = tar.entries()?
         .filter_map(Result::ok)
-        .map(|tarfile| scan_file(&tarfile, tarfile.path()?.to_path_buf(), rules))
+        .map(|mut tarfile|  { 
+            let path = tarfile.path()?.to_path_buf();
+            scan_file(&mut tarfile, path, rules) 
+        })
         .filter_map(Result::ok)
         .collect();
     
