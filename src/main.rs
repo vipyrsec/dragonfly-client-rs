@@ -24,7 +24,7 @@ fn runner(client: &DragonflyClient, job: &Job) -> Result<(), DragonflyError> {
     if state.hash != job.hash {
         info!("Local hash: {}, remote hash: {}", state.hash, job.hash);
         info!("State is behind, syncing...");
-        client.reauthorize()?;
+        client.sync_rules()?;
         info!("Successfully synced state!");
     }
     

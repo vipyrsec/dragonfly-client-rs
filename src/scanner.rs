@@ -113,8 +113,11 @@ impl DistributionScanResults {
         self.get_matched_rules().iter().map(|rule| rule.name.as_str()).collect()
     }
 
-    pub fn inspector_url(&self) -> &Url {
-        &self.inspector_url
+    /// Return the inspector URL of the most malicious file, or None if there is no most malicious
+    /// file
+    pub fn inspector_url(&self) -> Option<String> {
+        self.get_most_malicious_file()
+            .map(|file| format!("{}{}", self.inspector_url.as_str(), file.path.to_string_lossy().as_ref()))
     }
 }
 

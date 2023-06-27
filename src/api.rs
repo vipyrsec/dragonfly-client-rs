@@ -1,9 +1,10 @@
 use std::{
     io::{Cursor, Read},
-    sync::{Mutex, RwLock},
+    sync::RwLock,
 };
 use flate2::read::GzDecoder;
 use reqwest::{blocking::Client, Url};
+use tracing::info;
 use yara::{Compiler, Rules};
 use zip::ZipArchive;
 use crate::{
@@ -126,16 +127,18 @@ impl DragonflyClient {
             .max_by_key(|distrib| distrib.get_total_score());
         
         let score = highest_score_distribution.map(DistributionScanResults::get_total_score).unwrap_or_default();
-        let inspector_url = highest_score_distribution.map(DistributionScanResults::inspector_url).map(Url::as_ref);
+        let inspector_url = highest_score_distribution.and_then(DistributionScanResults::inspector_url);
         let rules_matched = highest_score_distribution.map(DistributionScanResults::get_matched_rule_identifiers).unwrap_or_default();
 
         let body = SubmitJobResultsBody {
             name: &job.name,
             version: &job.version,
             score,
-            inspector_url,
+            inspector_url: inspector_url.as_deref(),
             rules_matched: &rules_matched,
         };
+
+        info!("{body:#?}");
 
         self.client
             .put(format!("{}/package", APP_CONFIG.base_url))
