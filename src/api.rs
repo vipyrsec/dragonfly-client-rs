@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     io::{Cursor, Read},
     sync::RwLock,
 };
@@ -98,6 +99,7 @@ impl DragonflyClient {
         Ok(job)
     }
 
+<<<<<<< HEAD
     pub fn send_error(&self, job: &Job, reason: &str) -> Result<(), reqwest::Error> {
         let access_token = &self.state.read().unwrap().access_token; 
 
