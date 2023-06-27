@@ -1,4 +1,8 @@
-use std::{collections::HashSet, io::Read, path::{PathBuf, Path}};
+use std::{
+    collections::HashSet,
+    io::Read,
+    path::{Path, PathBuf},
+};
 
 use reqwest::{blocking::Client, Url};
 use yara::{MetadataValue, Rule, Rules};
