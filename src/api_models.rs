@@ -17,8 +17,6 @@ pub struct SubmitJobResultsError<'a> {
     pub name: &'a str,
     pub version: &'a str,
     pub reason: &'a str,
-    pub rules_matched: &'a HashSet<&'a str>,
-    pub commit: &'a str,
 }
 
 #[derive(Debug, Deserialize)]
@@ -58,4 +56,3 @@ pub struct AuthBody<'a> {
     pub username: &'a String,
     pub password: &'a String,
 }
-

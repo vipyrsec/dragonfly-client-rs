@@ -1,33 +1,28 @@
-use std::{
-    collections::HashSet,
-    io::{Cursor, Read},
-    sync::RwLock,
+use crate::{
+    api_models::SubmitJobResultsError,
+    common::{TarballType, ZipType},
+    scanner::DistributionScanResults,
+    APP_CONFIG,
 };
 use flate2::read::GzDecoder;
 use reqwest::{blocking::Client, Url};
+use std::{
+    io::{Cursor, Read},
+    sync::RwLock,
+};
 use tracing::info;
 use yara::{Compiler, Rules};
 use zip::ZipArchive;
-use crate::{
-    APP_CONFIG, 
-    common::{TarballType, ZipType}, scanner::DistributionScanResults, api_models::SubmitJobResultsError,
-};
 
 use crate::{
     api_models::{
-        AuthBody, 
-        AuthResponse, 
-        GetJobResponse, 
-        GetRulesResponse, 
-        Job, 
-        SubmitJobResultsBody,
+        AuthBody, AuthResponse, GetJobResponse, GetRulesResponse, Job, SubmitJobResultsBody,
     },
     error::DragonflyError,
 };
 
 /// Application state
 pub struct State {
-
     /// The current ruleset this client is using
     pub rules: yara::Rules,
 
@@ -49,14 +44,16 @@ impl DragonflyClient {
 
         let access_token = Self::fetch_access_token(&client)?;
         let (hash, rules) = Self::get_rules(&client, &access_token)?;
-        let state = State { rules, hash, access_token }.into();
+        let state = State {
+            rules,
+            hash,
+            access_token,
+        }
+        .into();
 
-        Ok(Self {
-            client,
-            state,
-        })
+        Ok(Self { client, state })
     }
-    
+
     /// Fetch a new access token and set it in state
     pub fn reauthorize(&self) -> Result<(), reqwest::Error> {
         let access_token = Self::fetch_access_token(self.get_http_client())?;
@@ -64,14 +61,11 @@ impl DragonflyClient {
 
         Ok(())
     }
-    
+
     /// Fetch the latest ruleset and set it in state
     pub fn sync_rules(&self) -> Result<(), DragonflyError> {
         let access_token = &self.state.read().unwrap().access_token;
-        let (hash, rules) = Self::get_rules(
-            self.get_http_client(),
-            access_token
-        )?;
+        let (hash, rules) = Self::get_rules(self.get_http_client(), access_token)?;
 
         let mut state = self.state.write().unwrap();
         state.hash = hash;
@@ -79,7 +73,7 @@ impl DragonflyClient {
 
         Ok(())
     }
-    
+
     /// Fetch a job. None if the server has nothing for us to do.
     pub fn get_job(&self) -> reqwest::Result<Option<Job>> {
         let access_token = &self.state.read().unwrap().access_token;
@@ -99,9 +93,8 @@ impl DragonflyClient {
         Ok(job)
     }
 
-<<<<<<< HEAD
     pub fn send_error(&self, job: &Job, reason: &str) -> Result<(), reqwest::Error> {
-        let access_token = &self.state.read().unwrap().access_token; 
+        let access_token = &self.state.read().unwrap().access_token;
 
         let body = SubmitJobResultsError {
             name: &job.name,
@@ -118,19 +111,29 @@ impl DragonflyClient {
 
         Ok(())
     }
-    
+
     /// Submit the results of a scan to the server, given the job and the scan results of each
     /// distribution
-    pub fn submit_job_results(&self, job: &Job, distribution_scan_results: &[DistributionScanResults]) -> reqwest::Result<()> {
-        let access_token = &self.state.read().unwrap().access_token;
+    pub fn submit_job_results(
+        &self,
+        job: &Job,
+        distribution_scan_results: &[DistributionScanResults],
+    ) -> reqwest::Result<()> {
+        let state = self.state.read().unwrap();
+        let access_token = &state.access_token;
 
-        let highest_score_distribution = distribution_scan_results 
+        let highest_score_distribution = distribution_scan_results
             .iter()
             .max_by_key(|distrib| distrib.get_total_score());
-        
-        let score = highest_score_distribution.map(DistributionScanResults::get_total_score).unwrap_or_default();
-        let inspector_url = highest_score_distribution.and_then(DistributionScanResults::inspector_url);
-        let rules_matched = highest_score_distribution.map(DistributionScanResults::get_matched_rule_identifiers).unwrap_or_default();
+
+        let score = highest_score_distribution
+            .map(DistributionScanResults::get_total_score)
+            .unwrap_or_default();
+        let inspector_url =
+            highest_score_distribution.and_then(DistributionScanResults::inspector_url);
+        let rules_matched = highest_score_distribution
+            .map(DistributionScanResults::get_matched_rule_identifiers)
+            .unwrap_or_default();
 
         let body = SubmitJobResultsBody {
             name: &job.name,
@@ -138,6 +141,7 @@ impl DragonflyClient {
             score,
             inspector_url: inspector_url.as_deref(),
             rules_matched: &rules_matched,
+            commit: &state.hash,
         };
 
         info!("{body:#?}");
@@ -179,12 +183,15 @@ impl DragonflyClient {
             .send()?
             .error_for_status()?
             .json()?;
-        
+
         Ok(res.access_token)
     }
 
-    fn get_rules(http_client: &Client, access_token: &str) -> Result<(String, Rules), DragonflyError> {
-        let res: GetRulesResponse = http_client 
+    fn get_rules(
+        http_client: &Client,
+        access_token: &str,
+    ) -> Result<(String, Rules), DragonflyError> {
+        let res: GetRulesResponse = http_client
             .get(format!("{}/rules", APP_CONFIG.base_url))
             .header("Authorization", format!("Bearer {access_token}"))
             .send()?
@@ -223,10 +230,7 @@ pub fn fetch_tarball(
     }
 }
 
-pub fn fetch_zipfile(
-    http_client: &Client, 
-    download_url: &Url,
-) -> Result<ZipType, DragonflyError> {
+pub fn fetch_zipfile(http_client: &Client, download_url: &Url) -> Result<ZipType, DragonflyError> {
     let mut response = http_client.get(download_url.to_string()).send()?;
 
     let mut cursor = Cursor::new(Vec::new());
@@ -239,4 +243,3 @@ pub fn fetch_zipfile(
         Ok(zip)
     }
 }
-

@@ -12,6 +12,6 @@ pub fn create_inspector_url(name: &str, version: &str, download_url: &Url) -> Ur
 
     download_url.set_host(Some("inspector.pypi.io")).unwrap();
     download_url.set_path(&new_path);
-    
+
     download_url
 }
