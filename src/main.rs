@@ -3,7 +3,7 @@ mod api_models;
 mod app_config;
 mod common;
 mod error;
-pub mod scanner;
+mod scanner;
 mod utils;
 
 use std::{sync::Arc, thread, time::Duration};
@@ -37,7 +37,7 @@ fn runner(client: &DragonflyClient, job: &Job) -> Result<(), DragonflyError> {
         info!("Got 401 unauthorized while submitting job, reauthorizing and trying again");
         client.reauthorize()?;
         info!("Successfully reauthorized! Sending results again...");
-        client.submit_job_results(&job, &distribution_scan_results)?;
+        client.submit_job_results(job, &distribution_scan_results)?;
     }
 
     info!("Successfully sent results upstream");

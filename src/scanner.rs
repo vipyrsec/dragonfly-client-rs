@@ -1,4 +1,4 @@
-use std::{collections::HashSet, io::Read, path::PathBuf};
+use std::{collections::HashSet, io::Read, path::{PathBuf, Path}};
 
 use reqwest::{blocking::Client, Url};
 use yara::{MetadataValue, Rule, Rules};
@@ -15,12 +15,6 @@ use crate::{
 pub struct RuleScore {
     pub name: String,
     pub score: Option<i64>,
-}
-
-impl RuleScore {
-    pub fn new(name: String, score: Option<i64>) -> Self {
-        Self { name, score }
-    }
 }
 
 /// The results of scanning a single file. Contains the file path and the rules it matched
@@ -61,13 +55,13 @@ impl Distribution {
                 file,
                 inspector_url,
             } => scan_tarball(file, rules)
-                .map(|files| DistributionScanResults::new(files, inspector_url.to_owned())),
+                .map(|files| DistributionScanResults::new(files, inspector_url.clone())),
 
             Self::Zip {
                 file,
                 inspector_url,
             } => scan_zip(file, rules)
-                .map(|files| DistributionScanResults::new(files, inspector_url.to_owned())),
+                .map(|files| DistributionScanResults::new(files, inspector_url.clone())),
         }
     }
 }
@@ -83,7 +77,7 @@ pub struct DistributionScanResults {
 }
 
 impl DistributionScanResults {
-    /// Create a new DistributionScanResults based off the results of it's files and the base
+    /// Create a new `DistributionScanResults` based off the results of it's files and the base
     /// inspector URL
     pub fn new(file_scan_results: Vec<FileScanResult>, inspector_url: Url) -> Self {
         Self {
@@ -100,7 +94,7 @@ impl DistributionScanResults {
             .max_by_key(|i| i.calculate_score())
     }
 
-    /// Get all **unique** RuleScore objects that were matched for this distribution
+    /// Get all **unique** `RuleScore` objects that were matched for this distribution
     fn get_matched_rules(&self) -> HashSet<&RuleScore> {
         let mut rules: HashSet<&RuleScore> = HashSet::new();
         for file_scan_result in &self.file_scan_results {
@@ -190,7 +184,7 @@ impl From<Rule<'_>> for RuleScore {
 /// against
 fn scan_file(
     file: &mut impl Read,
-    path: PathBuf,
+    path: &Path,
     rules: &Rules,
 ) -> Result<FileScanResult, DragonflyError> {
     let mut buffer = Vec::new();
@@ -216,7 +210,7 @@ pub fn scan_zip(zip: &mut ZipType, rules: &Rules) -> Result<Vec<FileScanResult>,
     for idx in 0..zip.len() {
         let mut file = zip.by_index(idx)?;
         let path = PathBuf::from(file.name());
-        let scan_results = scan_file(&mut file, path, rules)?;
+        let scan_results = scan_file(&mut file, &path, rules)?;
         file_scan_results.push(scan_results);
     }
 
@@ -233,7 +227,7 @@ pub fn scan_tarball(
         .filter_map(Result::ok)
         .map(|mut tarfile| {
             let path = tarfile.path()?.to_path_buf();
-            scan_file(&mut tarfile, path, rules)
+            scan_file(&mut tarfile, &path, rules)
         })
         .filter_map(Result::ok)
         .collect();
@@ -244,10 +238,10 @@ pub fn scan_tarball(
 /// Scan all the distributions of the given job against the given ruleset, returning the
 /// results of each distribution. Uses the provided HTTP client to download each
 /// distribution
-pub fn scan_all_distributions<'a>(
+pub fn scan_all_distributions(
     http_client: &Client,
     rules: &Rules,
-    job: &'a Job,
+    job: &Job,
 ) -> Result<Vec<DistributionScanResults>, DragonflyError> {
     let mut distribution_scan_results = Vec::new();
     for distribution in &job.distributions {

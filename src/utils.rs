@@ -1,8 +1,8 @@
 use reqwest::Url;
 
-/// Turn a package name, version, and download_url into a PyPI Inspector URL
+/// Turn a package `name`, `version`, and `download_url` into a PyPI Inspector URL
 pub fn create_inspector_url(name: &str, version: &str, download_url: &Url) -> Url {
-    let mut download_url = download_url.to_owned();
+    let mut download_url = download_url.clone();
     let new_path = format!(
         "project/{}/{}/{}/",
         name,

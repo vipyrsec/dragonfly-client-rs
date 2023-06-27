@@ -217,7 +217,7 @@ pub fn fetch_tarball(
     http_client: &Client,
     download_url: &Url,
 ) -> Result<TarballType, DragonflyError> {
-    let response = http_client.get(download_url.to_owned()).send()?;
+    let response = http_client.get(download_url.clone()).send()?;
 
     let mut decompressed = GzDecoder::new(response);
     let mut cursor: Cursor<Vec<u8>> = Cursor::new(Vec::new());
