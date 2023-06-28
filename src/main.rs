@@ -35,8 +35,7 @@ fn runner(client: &DragonflyClient, job: &Job) -> Result<(), DragonflyError> {
         .map_err(|err| err.status())
     {
         info!("Got 401 unauthorized while submitting job, reauthorizing and trying again");
-        client.reauthorize()?;
-        info!("Successfully reauthorized! Sending results again...");
+        client.reauthenticate();
         client.submit_job_results(job, &distribution_scan_results)?;
     }
 
@@ -76,17 +75,7 @@ fn main() -> Result<(), DragonflyError> {
                     thread::sleep(Duration::from_secs(s));
                 },
 
-                Err(http_error) if http_error.status() == Some(StatusCode::UNAUTHORIZED) => {
-                    info!("Got 401 UNAUTHORIZED while fetching rules, revalidating credentials and trying again...");
-                    if let Err(reauth_error) = client.reauthorize() {
-                        error!("Failed reauthorizing credentials! {reauth_error:#?}");
-                        continue;
-                    }
-
-                    info!("Successfully reauthorized, will use new credentials next time around");
-                },
-
-                Err(err) => error!("Unexpected error while fetching rules: {err:#?}")
+                Err(err) => error!("Unexpected error while fetching a job: {err:#?}")
             }
         });
     }

@@ -5,12 +5,12 @@ use crate::{
     APP_CONFIG,
 };
 use flate2::read::GzDecoder;
-use reqwest::{blocking::Client, Url};
+use reqwest::{blocking::Client, Url, StatusCode};
 use std::{
     io::{Cursor, Read},
-    sync::RwLock,
+    sync::{RwLock, RwLockWriteGuard}, time::Duration,
 };
-use tracing::info;
+use tracing::{info, warn, error};
 use yara::{Compiler, Rules};
 use zip::ZipArchive;
 
@@ -54,20 +54,53 @@ impl DragonflyClient {
         Ok(Self { client, state })
     }
 
-    /// Fetch a new access token and set it in state
-    pub fn reauthorize(&self) -> Result<(), reqwest::Error> {
-        let access_token = Self::fetch_access_token(self.get_http_client())?;
-        self.set_access_token(access_token);
+    /// Update the state with a new access token
+    ///
+    /// If an error occurs while reauthenticating, the function retries with an exponential backoff
+    /// described by the equation `min(10 * 60, 2^(x - 1))` where `x` is the number of failed tries.
+    pub fn reauthenticate(&self) {
+        let mut state = self.state.write().unwrap();
 
-        Ok(())
+        let access_token;
+
+        let base = 2_f64;
+        let initial_timeout = 1_f64;
+        let mut tries = 0;
+
+        loop {
+            let r = Self::fetch_access_token(self.get_http_client());
+            match r {
+                Ok(at) => {
+                    access_token = at;
+                    break;
+                }
+                Err(e) => {
+                    let sleep_time = if tries < 10 {
+                        let t = initial_timeout * base.powf(tries as f64);
+                        warn!("Failed to reauthenticate after {tries} tries! Error: {e:#?}. Trying again in {t:.3} seconds");
+                        t
+                    } else {
+                        error!("Failed to reauthenticate after {tries} tries! Error: {e:#?}. Trying again in 600.000 seconds");
+                        600_f64
+                    };
+
+                    std::thread::sleep(Duration::from_secs_f64(sleep_time));
+                    tries += 1;
+                }
+            }
+        }
+
+        info!("Successfully reauthenticated.");
+        state.access_token = access_token;
     }
 
-    /// Fetch the latest ruleset and set it in state
-    pub fn sync_rules(&self) -> Result<(), DragonflyError> {
-        let access_token = &self.state.read().unwrap().access_token;
-        let (hash, rules) = Self::get_rules(self.get_http_client(), access_token)?;
+    /// Update global ruleset.
+    ///
+    /// This function takes ownership of a [`RwLockWriteGuard`] and drops it when finished. This
+    /// guarantees only one thread can update the rules at once.
+    pub fn update_rules(&self, mut state: RwLockWriteGuard<State>) -> Result<(), DragonflyError> {
+        let (hash, rules) = Self::get_rules(self.get_http_client(), &state.access_token)?;
 
-        let mut state = self.state.write().unwrap();
         state.hash = hash;
         state.rules = rules;
 
@@ -146,24 +179,23 @@ impl DragonflyClient {
 
         info!("{body:#?}");
 
-        self.client
+        let r = self.client
             .put(format!("{}/package", APP_CONFIG.base_url))
             .header("Authorization", format!("Bearer {access_token}"))
             .json(&body)
             .send()?
-            .error_for_status()?;
+            .error_for_status();
 
-        Ok(())
+        return match r {
+            Ok(_) => Ok(()),
+            Err(e) if e.status() == Some(StatusCode::UNAUTHORIZED) => Ok(self.reauthenticate()),
+            Err(e) => Err(e),
+        }
     }
 
     // Return a reference to the underlying HTTP Client
     pub fn get_http_client(&self) -> &Client {
         &self.client
-    }
-
-    pub fn set_access_token(&self, access_token: String) {
-        let mut state = self.state.write().unwrap();
-        state.access_token = access_token;
     }
 
     fn fetch_access_token(http_client: &Client) -> Result<String, reqwest::Error> {
