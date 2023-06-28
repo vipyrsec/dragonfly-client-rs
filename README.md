@@ -59,11 +59,11 @@ Below are a list of environment variables that need to be configured, and what t
 
 | Variable | Default | Description |
 | -------- | ------- | ----------- |
-| `DRAGONFLY_BASE_URL` | `https://dragonfly.vipyrsec.com` | The base API URL for the mainframe server |
-| `DRAGONFLY_AUTH0_DOMAIN` | `vipyrsec.us.auth0.com` | The auth0 domain that requests go to |
-| `DRAGONFLY_AUDIENCE` | `https://dragonfly.vipyrsec.com` | Auth0 Audience field
-| `DRAGONFLY_GRANT_TYPE` | `password` | Auth0 grant type, only password will work.
-| `DRAGONFLY_CLIENT_ID` | | Auth0 client ID |
-| `DRAGONFLY_CLIENT_SECRET` | | Auth0 client secret |
-| `DRAGONFLY_USERNAME` | | Provisioned username |
-| `DRAGONFLY_PASSWORD` | | Provisioned password |
+| `BASE_URL` | `https://dragonfly.vipyrsec.com` | The base API URL for the mainframe server |
+| `AUTH0_DOMAIN` | `vipyrsec.us.auth0.com` | The auth0 domain that requests go to |
+| `AUDIENCE` | `https://dragonfly.vipyrsec.com` | Auth0 Audience field
+| `GRANT_TYPE` | `password` | Auth0 grant type, only password will work.
+| `CLIENT_ID` | | Auth0 client ID |
+| `CLIENT_SECRET` | | Auth0 client secret |
+| `USERNAME` | | Provisioned username |
+| `PASSWORD` | | Provisioned password |
