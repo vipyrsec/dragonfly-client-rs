@@ -62,6 +62,8 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
             type=edge
+            # FIXME: Remove explicit `latest` tag once we start tagging releases
+            type=raw,value=latest,enable={{is_default_branch}}
             type=ref,event=tag
             type=sha,format=long
 
