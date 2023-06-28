@@ -5,12 +5,13 @@ use crate::{
     APP_CONFIG,
 };
 use flate2::read::GzDecoder;
-use reqwest::{blocking::Client, Url, StatusCode};
+use reqwest::{blocking::Client, StatusCode, Url};
 use std::{
     io::{Cursor, Read},
-    sync::{RwLock, RwLockWriteGuard}, time::Duration,
+    sync::{RwLock, RwLockWriteGuard},
+    time::Duration,
 };
-use tracing::{info, warn, error};
+use tracing::{error, info, warn};
 use yara::{Compiler, Rules};
 use zip::ZipArchive;
 
@@ -76,7 +77,7 @@ impl DragonflyClient {
                 }
                 Err(e) => {
                     let sleep_time = if tries < 10 {
-                        let t = initial_timeout * base.powf(tries as f64);
+                        let t = initial_timeout * base.powf(f64::from(tries));
                         warn!("Failed to reauthenticate after {tries} tries! Error: {e:#?}. Trying again in {t:.3} seconds");
                         t
                     } else {
@@ -179,16 +180,20 @@ impl DragonflyClient {
 
         info!("{body:#?}");
 
-        let r = self.client
+        let r = self
+            .client
             .put(format!("{}/package", APP_CONFIG.base_url))
             .header("Authorization", format!("Bearer {access_token}"))
             .json(&body)
             .send()?
             .error_for_status();
 
-        return match r {
+        match r {
             Ok(_) => Ok(()),
-            Err(e) if e.status() == Some(StatusCode::UNAUTHORIZED) => Ok(self.reauthenticate()),
+            Err(e) if e.status() == Some(StatusCode::UNAUTHORIZED) => {
+                self.reauthenticate();
+                Ok(())
+            }
             Err(e) => Err(e),
         }
     }
