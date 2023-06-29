@@ -93,7 +93,7 @@ impl DragonflyClient {
         Ok(job)
     }
 
-    pub fn send_error(&self, job: &Job, reason: &str) -> Result<(), reqwest::Error> {
+    pub fn send_error(&self, job: &Job, reason: &str) -> reqwest::Result<()> {
         let access_token = &self.state.read().unwrap().access_token;
 
         let body = SubmitJobResultsError {
@@ -114,7 +114,7 @@ impl DragonflyClient {
 
     /// Submit the results of a scan to the server, given the job and the scan results of each
     /// distribution
-    pub fn submit_job_results(
+    pub fn send_success(
         &self,
         job: &Job,
         distribution_scan_results: &[DistributionScanResults],

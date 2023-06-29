@@ -18,7 +18,7 @@ use crate::{
 #[derive(Debug, Hash, Eq, PartialEq)]
 pub struct RuleScore {
     pub name: String,
-    pub score: Option<i64>,
+    pub score: i64,
 }
 
 /// The results of scanning a single file. Contains the file path and the rules it matched
@@ -35,7 +35,7 @@ impl FileScanResult {
 
     /// Calculate the "maliciousness" index of this file
     fn calculate_score(&self) -> i64 {
-        self.rules.iter().map(|i| i.score.unwrap_or(0)).sum()
+        self.rules.iter().map(|i| i.score).sum()
     }
 }
 
@@ -81,7 +81,7 @@ pub struct DistributionScanResults {
 }
 
 impl DistributionScanResults {
-    /// Create a new `DistributionScanResults` based off the results of it's files and the base
+    /// Create a new `DistributionScanResults` based off the results of its files and the base
     /// inspector URL
     pub fn new(file_scan_results: Vec<FileScanResult>, inspector_url: Url) -> Self {
         Self {
@@ -90,8 +90,9 @@ impl DistributionScanResults {
         }
     }
 
-    /// Get the "most malicious file" in the distribution. This is calculated based off the file
-    /// with the highest score in this distribution
+    /// Get the "most malicious file" in the distribution.
+    ///
+    /// This file with the greatest sum of scores is considered the most malicious
     pub fn get_most_malicious_file(&self) -> Option<&FileScanResult> {
         self.file_scan_results
             .iter()
@@ -112,10 +113,7 @@ impl DistributionScanResults {
 
     /// Calculate the total score of this distribution, without counting duplicates twice
     pub fn get_total_score(&self) -> i64 {
-        self.get_matched_rules()
-            .iter()
-            .map(|rule| rule.score.unwrap_or(0))
-            .sum()
+        self.get_matched_rules().iter().map(|rule| rule.score).sum()
     }
 
     /// Get a vector over the identifiers of the all **unique** rules this distribution matched
@@ -144,7 +142,8 @@ trait RuleExt<'a> {
     fn get_metadata_value(&'a self, key: &str) -> Option<&'a MetadataValue>;
 
     /// Get a vector over the `filetype` metadata value. None if none are defined.
-    fn get_rule_weight(&'a self) -> Option<i64>;
+    /// `0` if no weight was defined
+    fn get_rule_weight(&'a self) -> i64;
 
     /// Get the weight of this rule. None if not defined.
     fn get_filetypes(&'a self) -> Option<Vec<&'a str>>;
@@ -166,11 +165,11 @@ impl<'a> RuleExt<'a> for Rule<'a> {
         }
     }
 
-    fn get_rule_weight(&self) -> Option<i64> {
+    fn get_rule_weight(&self) -> i64 {
         if let Some(MetadataValue::Integer(integer)) = self.get_metadata_value("weight") {
-            Some(*integer)
+            *integer
         } else {
-            None
+            0
         }
     }
 }
@@ -184,8 +183,11 @@ impl From<Rule<'_>> for RuleScore {
     }
 }
 
-/// Scan a file given it implements Read. Also takes the path of the file and the rules to scan it
-/// against
+/// Scan a file given it implements `Read`.
+///
+/// # Arguments
+/// * `path` - The path corresponding to this file
+/// * `rules` - The compiled rule set to scan this file against
 fn scan_file(
     file: &mut impl Read,
     path: &Path,

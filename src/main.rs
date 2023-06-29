@@ -31,13 +31,13 @@ fn runner(client: &DragonflyClient, job: &Job) -> Result<(), DragonflyError> {
     let distribution_scan_results =
         scan_all_distributions(client.get_http_client(), &state.rules, job)?;
     if let Err(Some(StatusCode::UNAUTHORIZED)) = client
-        .submit_job_results(job, &distribution_scan_results)
+        .send_success(job, &distribution_scan_results)
         .map_err(|err| err.status())
     {
         info!("Got 401 unauthorized while submitting job, reauthorizing and trying again");
         client.reauthorize()?;
         info!("Successfully reauthorized! Sending results again...");
-        client.submit_job_results(job, &distribution_scan_results)?;
+        client.send_success(job, &distribution_scan_results)?;
     }
 
     info!("Successfully sent results upstream");

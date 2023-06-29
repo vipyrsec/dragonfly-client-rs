@@ -1,6 +1,6 @@
 use reqwest::Url;
 
-#[allow(clippy::doc_markdown)] // Clippy things PyPI is a documentation item
+#[allow(clippy::doc_markdown)] // Clippy thinks PyPI is a documentation item
 /// Turn a package `name`, `version`, and `download_url` into a PyPI Inspector URL
 pub fn create_inspector_url(name: &str, version: &str, download_url: &Url) -> Url {
     let mut download_url = download_url.clone();
