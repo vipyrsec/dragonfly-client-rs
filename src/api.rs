@@ -178,7 +178,7 @@ impl DragonflyClient {
             commit: &state.hash,
         };
 
-        info!("{body:#?}");
+        info!("Results for this scan: {body:#?}");
 
         let r = self
             .client
