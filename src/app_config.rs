@@ -13,11 +13,12 @@ pub struct AppConfig {
     pub grant_type: String,
     pub username: String,
     pub password: String,
-    pub max_scan_size: usize,
+    pub max_scan_size: u64,
 }
 
 impl AppConfig {
     pub fn build() -> Result<Self, ConfigError> {
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         Config::builder()
             .add_source(config::File::with_name("Config.toml").required(false))
             .add_source(config::File::with_name("Config-dev.toml").required(false))
@@ -28,7 +29,7 @@ impl AppConfig {
             .set_default("audience", "https://dragonfly.vipyrsec.com")?
             .set_default("grant_type", "password")?
             .set_default("wait_duration", 60u64)?
-            .set_default("max_scan_size", 2.56e+8)?
+            .set_default("max_scan_size", 2.56e+8 as u64)?
             .build()?
             .try_deserialize()
     }
