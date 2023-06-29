@@ -11,34 +11,32 @@ use std::{sync::Arc, thread, time::Duration};
 use api::DragonflyClient;
 use api_models::Job;
 use error::DragonflyError;
-use reqwest::StatusCode;
 use threadpool::ThreadPool;
-use tracing::{error, info, span, Level};
+use tracing::{debug, error, info, span, Level};
 
 use crate::{common::APP_CONFIG, scanner::scan_all_distributions};
 
 fn runner(client: &DragonflyClient, job: &Job) -> Result<(), DragonflyError> {
-    info!("Starting job {}@{}", job.name, job.version);
+    debug!("Starting job {}@{}", job.name, job.version);
 
-    let state = client.state.read().unwrap();
+    let state = client.state.write().unwrap();
     if state.hash != job.hash {
-        info!("Local hash: {}, remote hash: {}", state.hash, job.hash);
-        info!("State is behind, syncing...");
-        client.sync_rules()?;
+        info!(
+            "Rules are outdated: attempting to update from {} to {}.",
+            state.hash, job.hash
+        );
+
+        // give ownership of WriteGuard to update_rules...
+        client.update_rules(state)?;
         info!("Successfully synced state!");
     }
 
+    // then acquire a ReadGuard for scanning and sending results
+    let state = client.state.read().unwrap();
+
     let distribution_scan_results =
         scan_all_distributions(client.get_http_client(), &state.rules, job)?;
-    if let Err(Some(StatusCode::UNAUTHORIZED)) = client
-        .send_success(job, &distribution_scan_results)
-        .map_err(|err| err.status())
-    {
-        info!("Got 401 unauthorized while submitting job, reauthorizing and trying again");
-        client.reauthorize()?;
-        info!("Successfully reauthorized! Sending results again...");
-        client.send_success(job, &distribution_scan_results)?;
-    }
+    client.send_success(job, &distribution_scan_results)?;
 
     info!("Successfully sent results upstream");
 
@@ -59,8 +57,7 @@ fn main() -> Result<(), DragonflyError> {
             match client.get_job() {
                 Ok(Some(job)) => {
                     // Set up logging
-                    let span =
-                        span!(Level::INFO, "Job", name = job.name, version = job.version);
+                    let span = span!(Level::INFO, "Job", name = job.name, version = job.version);
                     let _enter = span.enter();
 
                     if let Err(err) = runner(&client, &job) {
@@ -68,25 +65,15 @@ fn main() -> Result<(), DragonflyError> {
                         error!("Unexpected error: {errstr}");
                         client.send_error(&job, &errstr).unwrap();
                     }
-                },
+                }
 
                 Ok(None) => {
                     let s = APP_CONFIG.wait_duration;
                     info!("No job found! Trying again in {s} seconds...");
                     thread::sleep(Duration::from_secs(s));
-                },
+                }
 
-                Err(http_error) if http_error.status() == Some(StatusCode::UNAUTHORIZED) => {
-                    info!("Got 401 UNAUTHORIZED while fetching rules, revalidating credentials and trying again...");
-                    if let Err(reauth_error) = client.reauthorize() {
-                        error!("Failed reauthorizing credentials! {reauth_error:#?}");
-                        continue;
-                    }
-
-                    info!("Successfully reauthorized, will use new credentials next time around");
-                },
-
-                Err(err) => error!("Unexpected error while fetching rules: {err:#?}")
+                Err(err) => error!("Unexpected error while fetching a job: {err:#?}"),
             }
         });
     }
