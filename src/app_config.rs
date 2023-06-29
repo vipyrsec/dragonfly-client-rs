@@ -1,5 +1,3 @@
-use std::num::NonZeroUsize;
-
 use config::{Config, ConfigError};
 use serde::Deserialize;
 
