@@ -1,3 +1,5 @@
+use std::num::NonZeroUsize;
+
 use config::{Config, ConfigError};
 use serde::Deserialize;
 
@@ -24,7 +26,7 @@ impl AppConfig {
             .add_source(config::File::with_name("Config-dev.toml").required(false))
             .add_source(config::Environment::default())
             .set_default("base_url", "https://dragonfly.vipyrsec.com")?
-            .set_default("threads", 1)?
+            .set_default("threads", std::thread::available_parallelism().map(usize::from).unwrap_or(1) as u64)?
             .set_default("auth0_domain", "vipyrsec.us.auth0.com")?
             .set_default("audience", "https://dragonfly.vipyrsec.com")?
             .set_default("grant_type", "password")?
