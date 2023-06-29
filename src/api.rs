@@ -259,7 +259,7 @@ pub fn fetch_tarball(
     let mut decompressed = GzDecoder::new(response);
     let mut cursor: Cursor<Vec<u8>> = Cursor::new(Vec::new());
     let read = decompressed.read_to_end(cursor.get_mut())?;
-    
+
     #[allow(clippy::cast_possible_truncation)]
     if read > APP_CONFIG.max_scan_size as usize {
         Err(DragonflyError::DownloadTooLarge(download_url.to_string()))
