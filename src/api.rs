@@ -198,7 +198,7 @@ impl DragonflyClient {
         }
     }
 
-    // Return a reference to the underlying HTTP Client
+    /// Return a reference to the underlying HTTP Client
     pub fn get_http_client(&self) -> &Client {
         &self.client
     }

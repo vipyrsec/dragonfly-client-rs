@@ -141,23 +141,23 @@ trait RuleExt<'a> {
     /// Get the value of a metadata by key. `None` if that key/value pair doesn't exist
     fn get_metadata_value(&'a self, key: &str) -> Option<&'a MetadataValue>;
 
-    /// Get a vector over the `filetype` metadata value. None if none are defined.
-    /// `0` if no weight was defined
+    /// Get the weight of this rule. None if not defined.
     fn get_rule_weight(&'a self) -> i64;
 
-    /// Get the weight of this rule. None if not defined.
+    /// Get a vector over the `filetype` metadata value. None if none are defined.
+    /// `0` if no weight was defined
     fn get_filetypes(&'a self) -> Option<Vec<&'a str>>;
 }
 
-impl<'a> RuleExt<'a> for Rule<'a> {
-    fn get_metadata_value(&self, key: &str) -> Option<&'a MetadataValue> {
+impl RuleExt<'_> for Rule<'_> {
+    fn get_metadata_value(&self, key: &str) -> Option<&'_ MetadataValue> {
         self.metadatas
             .iter()
             .find(|metadata| metadata.identifier == key)
             .map(|metadata| &metadata.value)
     }
 
-    fn get_filetypes(&'a self) -> Option<Vec<&'a str>> {
+    fn get_filetypes(&'_ self) -> Option<Vec<&'_ str>> {
         if let Some(MetadataValue::String(string)) = self.get_metadata_value("filetype") {
             Some(string.split(' ').collect())
         } else {
@@ -249,7 +249,7 @@ pub fn scan_all_distributions(
     rules: &Rules,
     job: &Job,
 ) -> Result<Vec<DistributionScanResults>, DragonflyError> {
-    let mut distribution_scan_results = Vec::new();
+    let mut distribution_scan_results = Vec::with_capacity(job.distributions.len());
     for distribution in &job.distributions {
         let download_url: Url = distribution.parse().unwrap();
         let inspector_url = create_inspector_url(&job.name, &job.version, &download_url);
