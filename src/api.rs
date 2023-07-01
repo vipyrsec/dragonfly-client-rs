@@ -260,7 +260,6 @@ pub fn fetch_tarball(
     let mut cursor: Cursor<Vec<u8>> = Cursor::new(Vec::new());
     let read = decompressed.read_to_end(cursor.get_mut())?;
 
-    #[allow(clippy::cast_possible_truncation)]
     if read > APP_CONFIG.max_scan_size {
         Err(DragonflyError::DownloadTooLarge(download_url.to_string()))
     } else {
@@ -274,7 +273,6 @@ pub fn fetch_zipfile(http_client: &Client, download_url: &Url) -> Result<ZipType
     let mut cursor = Cursor::new(Vec::new());
     let read = response.read_to_end(cursor.get_mut())?;
 
-    #[allow(clippy::cast_possible_truncation)]
     if read > APP_CONFIG.max_scan_size {
         Err(DragonflyError::DownloadTooLarge(download_url.to_string()))
     } else {
