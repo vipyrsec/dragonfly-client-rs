@@ -261,7 +261,7 @@ pub fn fetch_tarball(
     let read = decompressed.read_to_end(cursor.get_mut())?;
 
     #[allow(clippy::cast_possible_truncation)]
-    if read > APP_CONFIG.max_scan_size as usize {
+    if read > APP_CONFIG.max_scan_size {
         Err(DragonflyError::DownloadTooLarge(download_url.to_string()))
     } else {
         Ok(tar::Archive::new(cursor))
@@ -275,7 +275,7 @@ pub fn fetch_zipfile(http_client: &Client, download_url: &Url) -> Result<ZipType
     let read = response.read_to_end(cursor.get_mut())?;
 
     #[allow(clippy::cast_possible_truncation)]
-    if read > APP_CONFIG.max_scan_size as usize {
+    if read > APP_CONFIG.max_scan_size {
         Err(DragonflyError::DownloadTooLarge(download_url.to_string()))
     } else {
         let zip = ZipArchive::new(cursor)?;

@@ -1,6 +1,6 @@
 use std::io;
 
-use config::ConfigError;
+use figment::Error as ConfigError;
 use thiserror::Error;
 use zip::result::ZipError;
 
@@ -42,6 +42,7 @@ pub enum DragonflyError {
         #[from]
         source: ConfigError,
     },
+
     #[error("Download too large: '{0:#?}'")]
     DownloadTooLarge(String),
 }
