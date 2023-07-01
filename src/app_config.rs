@@ -16,7 +16,7 @@ pub struct AppConfig {
     pub grant_type: String,
     pub username: String,
     pub password: String,
-    pub max_scan_size: usize,
+    pub max_scan_size: u64,
 }
 
 impl Default for AppConfig {
@@ -35,7 +35,7 @@ impl Default for AppConfig {
                 .map(usize::from)
                 .unwrap_or(1),
             wait_duration: 60u64,
-            max_scan_size: 2.56e+8 as usize,
+            max_scan_size: 1.28e+8 as u64, // 128 MB
         }
     }
 }
