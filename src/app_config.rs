@@ -1,5 +1,8 @@
-use figment::{Figment, providers::{Serialized, Toml, Format, Env}};
-use serde::{Serialize, Deserialize};
+use figment::{
+    providers::{Env, Format, Serialized, Toml},
+    Figment,
+};
+use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize)]
 pub struct AppConfig {
@@ -28,7 +31,9 @@ impl Default for AppConfig {
             client_secret: String::new(),
             username: String::new(),
             password: String::new(),
-            threads: std::thread::available_parallelism().map(usize::from).unwrap_or(1),
+            threads: std::thread::available_parallelism()
+                .map(usize::from)
+                .unwrap_or(1),
             wait_duration: 60u64,
             max_scan_size: 2.56e+8 as usize,
         }
