@@ -256,27 +256,22 @@ pub fn fetch_tarball(
 ) -> Result<TarballType, DragonflyError> {
     let response = http_client.get(download_url.clone()).send()?;
 
-    let mut decompressed = GzDecoder::new(response);
+    let decompressed = GzDecoder::new(response);
     let mut cursor: Cursor<Vec<u8>> = Cursor::new(Vec::new());
-    let read = decompressed.read_to_end(cursor.get_mut())?;
+    decompressed.
+        take(APP_CONFIG.max_scan_size as u64)
+        .read_to_end(cursor.get_mut())?;
 
-    if read > APP_CONFIG.max_scan_size {
-        Err(DragonflyError::DownloadTooLarge(download_url.to_string()))
-    } else {
-        Ok(tar::Archive::new(cursor))
-    }
+    Ok(tar::Archive::new(cursor))
 }
 
 pub fn fetch_zipfile(http_client: &Client, download_url: &Url) -> Result<ZipType, DragonflyError> {
-    let mut response = http_client.get(download_url.to_string()).send()?;
+    let response = http_client.get(download_url.to_string()).send()?;
 
     let mut cursor = Cursor::new(Vec::new());
-    let read = response.read_to_end(cursor.get_mut())?;
+    response
+        .take(APP_CONFIG.max_scan_size as u64)
+        .read_to_end(cursor.get_mut())?;
 
-    if read > APP_CONFIG.max_scan_size {
-        Err(DragonflyError::DownloadTooLarge(download_url.to_string()))
-    } else {
-        let zip = ZipArchive::new(cursor)?;
-        Ok(zip)
-    }
+    Ok(zip::ZipArchive::new(cursor)?)
 }
