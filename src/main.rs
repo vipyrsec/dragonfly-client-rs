@@ -7,11 +7,14 @@ use std::{path::Path, sync::Arc, thread, time::Duration};
 
 use api::DragonflyClient;
 use api_models::Job;
-use config::Config;
 use error::DragonflyError;
+use figment::{
+    providers::{Env, Format, Serialized, Toml},
+    Figment,
+};
 use reqwest::StatusCode;
 use scanner::{scan_distribution, DistributionScanResults};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use threadpool::ThreadPool;
 use tracing::{error, info, span, Level};
 
@@ -106,7 +109,7 @@ fn runner(client: &DragonflyClient, job: &Job) -> Result<(), DragonflyError> {
     Ok(())
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 pub struct AppConfig {
     pub base_url: String,
     pub threads: usize,
@@ -120,18 +123,28 @@ pub struct AppConfig {
     pub password: String,
 }
 
+impl Default for AppConfig {
+    fn default() -> AppConfig {
+        AppConfig {
+            base_url: String::from("https://dragonfly.vipyrsec.com"),
+            auth0_domain: String::from("vipyrsec.us.auth0.com"),
+            audience: String::from("https://dragonfly.vipyrsec.com"),
+            grant_type: String::from("password"),
+            client_id: String::new(),
+            client_secret: String::new(),
+            username: String::new(),
+            password: String::new(),
+            threads: 1,
+            wait_duration: 60u64,
+        }
+    }
+}
+
 fn main() -> Result<(), DragonflyError> {
-    let config: AppConfig = Config::builder()
-        .add_source(config::File::with_name("Config.toml").required(false))
-        .add_source(config::Environment::default())
-        .set_default("base_url", "https://dragonfly.vipyrsec.com")?
-        .set_default("threads", 1)?
-        .set_default("auth0_domain", "vipyrsec.us.auth0.com")?
-        .set_default("audience", "https://dragonfly.vipyrsec.com")?
-        .set_default("grant_type", "password")?
-        .set_default("wait_duration", 60u64)?
-        .build()?
-        .try_deserialize()?;
+    let config: AppConfig = Figment::from(Serialized::defaults(AppConfig::default()))
+        .merge(Toml::file("Config.toml"))
+        .merge(Env::prefixed("DRAGONFLY_"))
+        .extract()?;
 
     tracing_subscriber::fmt().init();
     let client = Arc::new(DragonflyClient::new(config)?);
