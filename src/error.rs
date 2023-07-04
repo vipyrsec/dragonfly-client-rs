@@ -43,6 +43,7 @@ pub enum DragonflyError {
         source: ConfigError,
     },
 
+    #[allow(dead_code)]
     #[error("Download too large: '{0:#?}'")]
     DownloadTooLarge(String),
 }

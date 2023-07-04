@@ -94,7 +94,7 @@ impl DragonflyClient {
         state.access_token = access_token;
     }
 
-    /// Update global ruleset.
+    /// Update the global ruleset.
     ///
     /// This function takes ownership of a [`RwLockWriteGuard`] and drops it when finished. This
     /// guarantees only one thread can update the rules at once.
@@ -126,6 +126,7 @@ impl DragonflyClient {
         Ok(job)
     }
 
+    /// Report an error to the server.
     pub fn send_error(&self, job: &Job, reason: &str) -> reqwest::Result<()> {
         let access_token = &self.state.read().unwrap().access_token;
 

@@ -33,7 +33,7 @@ impl FileScanResult {
         Self { path, rules }
     }
 
-    /// Calculate the "maliciousness" index of this file
+    /// Returns the total score of all matched rules.
     fn calculate_score(&self) -> i64 {
         self.rules.iter().map(|i| i.score).sum()
     }
@@ -92,7 +92,8 @@ impl DistributionScanResults {
 
     /// Get the "most malicious file" in the distribution.
     ///
-    /// This file with the greatest sum of scores is considered the most malicious
+    /// This file with the greatest score is considered the most malicious. If multiple
+    /// files have the same score, an arbitrary file is picked.
     pub fn get_most_malicious_file(&self) -> Option<&FileScanResult> {
         self.file_scan_results
             .iter()
@@ -124,8 +125,10 @@ impl DistributionScanResults {
             .collect()
     }
 
-    /// Return the inspector URL of the most malicious file, or None if there is no most malicious
+    /// Return the inspector URL of the most malicious file, or `None` if there is no most malicious
     /// file
+    ///
+    ///
     pub fn inspector_url(&self) -> Option<String> {
         self.get_most_malicious_file().map(|file| {
             format!(
@@ -141,11 +144,10 @@ trait RuleExt<'a> {
     /// Get the value of a metadata by key. `None` if that key/value pair doesn't exist
     fn get_metadata_value(&'a self, key: &str) -> Option<&'a MetadataValue>;
 
-    /// Get the weight of this rule. None if not defined.
+    /// Get the weight of this rule. `0` if no weight is defined.
     fn get_rule_weight(&'a self) -> i64;
 
-    /// Get a vector over the `filetype` metadata value. None if none are defined.
-    /// `0` if no weight was defined
+    /// Get a vector over the `filetype` metadata value. `None` if none are defined.
     fn get_filetypes(&'a self) -> Option<Vec<&'a str>>;
 }
 
@@ -241,9 +243,9 @@ pub fn scan_tarball(
     Ok(file_scan_results)
 }
 
-/// Scan all the distributions of the given job against the given ruleset, returning the
-/// results of each distribution. Uses the provided HTTP client to download each
-/// distribution
+/// Scan all the distributions of the given job against the given ruleset
+///
+/// Uses the provided HTTP client to download each distribution.
 pub fn scan_all_distributions(
     http_client: &Client,
     rules: &Rules,
