@@ -13,7 +13,6 @@ use std::{
 };
 use tracing::{error, info, warn};
 use yara::{Compiler, Rules};
-use zip::ZipArchive;
 
 use crate::{
     api_models::{
@@ -203,7 +202,7 @@ impl DragonflyClient {
         &self.client
     }
 
-    fn fetch_access_token(http_client: &Client) -> Result<String, reqwest::Error> {
+    fn fetch_access_token(http_client: &Client) -> reqwest::Result<String> {
         let url = format!("https://{}/oauth/token", APP_CONFIG.auth0_domain);
         let json_body = AuthBody {
             client_id: &APP_CONFIG.client_id,
@@ -258,8 +257,8 @@ pub fn fetch_tarball(
 
     let decompressed = GzDecoder::new(response);
     let mut cursor: Cursor<Vec<u8>> = Cursor::new(Vec::new());
-    decompressed.
-        take(APP_CONFIG.max_scan_size as u64)
+    decompressed
+        .take(APP_CONFIG.max_scan_size)
         .read_to_end(cursor.get_mut())?;
 
     Ok(tar::Archive::new(cursor))
@@ -270,7 +269,7 @@ pub fn fetch_zipfile(http_client: &Client, download_url: &Url) -> Result<ZipType
 
     let mut cursor = Cursor::new(Vec::new());
     response
-        .take(APP_CONFIG.max_scan_size as u64)
+        .take(APP_CONFIG.max_scan_size)
         .read_to_end(cursor.get_mut())?;
 
     Ok(zip::ZipArchive::new(cursor)?)
