@@ -198,6 +198,9 @@ trait RuleExt<'a> {
     fn get_rule_weight(&'a self) -> i64;
 
     /// Get a vector over the `filetype` metadata value. `None` if none are defined.
+    ///
+    /// If no filetypes are found, then this Rule should be applied to all filetypes. We use an
+    /// [`Option`] to indicate the 0 length case is treated differently.
     fn get_filetypes(&'a self) -> Option<Vec<&'a str>>;
 }
 
