@@ -43,7 +43,7 @@ impl DragonflyClient {
         let client = Client::builder().gzip(true).build()?;
 
         let access_token = Self::fetch_access_token(&client)?;
-        let (hash, rules) = Self::get_rules(&client, &access_token)?;
+        let (hash, rules) = Self::fetch_rules(&client, &access_token)?;
         let state = State {
             rules,
             hash,
@@ -99,7 +99,7 @@ impl DragonflyClient {
     /// This function takes ownership of a [`RwLockWriteGuard`] and drops it when finished. This
     /// guarantees only one thread can update the rules at once.
     pub fn update_rules(&self, mut state: RwLockWriteGuard<State>) -> Result<(), DragonflyError> {
-        let (hash, rules) = Self::get_rules(self.get_http_client(), &state.access_token)?;
+        let (hash, rules) = Self::fetch_rules(self.get_http_client(), &state.access_token)?;
 
         state.hash = hash;
         state.rules = rules;
@@ -224,7 +224,7 @@ impl DragonflyClient {
         Ok(res.access_token)
     }
 
-    fn get_rules(
+    fn fetch_rules(
         http_client: &Client,
         access_token: &str,
     ) -> Result<(String, Rules), DragonflyError> {
