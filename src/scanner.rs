@@ -39,34 +39,84 @@ impl FileScanResult {
     }
 }
 
-enum Distribution {
-    Tar {
-        file: TarballType,
-        inspector_url: Url,
-    },
+/// Scan a file given it implements `Read`.
+///
+/// # Arguments
+/// * `path` - The path corresponding to this file
+/// * `rules` - The compiled rule set to scan this file against
+fn scan_file(
+    file: &mut impl Read,
+    path: &Path,
+    rules: &Rules,
+) -> Result<FileScanResult, DragonflyError> {
+    let mut buffer = Vec::new();
+    file.read_to_end(&mut buffer)?;
 
-    Zip {
-        file: ZipType,
-        inspector_url: Url,
-    },
+    let rules: Vec<RuleScore> = rules
+        .scan_mem(&buffer, 10)?
+        .into_iter()
+        .filter(|rule| {
+            rule.get_filetypes()
+                .filter(|filetypes| filetypes.iter().any(|filetype| path.ends_with(filetype)))
+                .is_some()
+        })
+        .map(RuleScore::from)
+        .collect();
+
+    Ok(FileScanResult::new(path.to_path_buf(), rules))
+}
+
+/// Scan an archive format using Yara rules.
+trait Scan {
+    fn scan(&mut self, rules: &Rules) -> Result<Vec<FileScanResult>, DragonflyError>;
+}
+
+impl Scan for TarballType {
+    /// Scan a tarball against the given rule set
+    fn scan(&mut self, rules: &Rules) -> Result<Vec<FileScanResult>, DragonflyError> {
+        let file_scan_results = self
+            .entries()?
+            .filter_map(Result::ok)
+            .map(|mut tarfile| {
+                let path = tarfile.path()?.to_path_buf();
+                scan_file(&mut tarfile, &path, rules)
+            })
+            .filter_map(Result::ok)
+            .collect();
+
+        Ok(file_scan_results)
+    }
+}
+
+impl Scan for ZipType {
+    /// Scan a zipfile against the given rule set
+    fn scan(&mut self, rules: &Rules) -> Result<Vec<FileScanResult>, DragonflyError> {
+        let mut file_scan_results = Vec::new();
+        for idx in 0..self.len() {
+            let mut file = self.by_index(idx)?;
+            let path = PathBuf::from(file.name());
+            let scan_results = scan_file(&mut file, &path, rules)?;
+            file_scan_results.push(scan_results);
+        }
+
+        Ok(file_scan_results)
+    }
+}
+
+/// A distribution consisting of an archive and an inspector url.
+struct Distribution {
+    file: Box<dyn Scan>,
+    inspector_url: Url,
 }
 
 impl Distribution {
-    /// Scan this distribution against the given rules
     fn scan(&mut self, rules: &Rules) -> Result<DistributionScanResults, DragonflyError> {
-        match self {
-            Self::Tar {
-                file,
-                inspector_url,
-            } => scan_tarball(file, rules)
-                .map(|files| DistributionScanResults::new(files, inspector_url.clone())),
+        let results = self.file.scan(rules)?;
 
-            Self::Zip {
-                file,
-                inspector_url,
-            } => scan_zip(file, rules)
-                .map(|files| DistributionScanResults::new(files, inspector_url.clone())),
-        }
+        Ok(DistributionScanResults::new(
+            results,
+            self.inspector_url.clone(),
+        ))
     }
 }
 
@@ -185,64 +235,6 @@ impl From<Rule<'_>> for RuleScore {
     }
 }
 
-/// Scan a file given it implements `Read`.
-///
-/// # Arguments
-/// * `path` - The path corresponding to this file
-/// * `rules` - The compiled rule set to scan this file against
-fn scan_file(
-    file: &mut impl Read,
-    path: &Path,
-    rules: &Rules,
-) -> Result<FileScanResult, DragonflyError> {
-    let mut buffer = Vec::new();
-    file.read_to_end(&mut buffer)?;
-
-    let rules: Vec<RuleScore> = rules
-        .scan_mem(&buffer, 10)?
-        .into_iter()
-        .filter(|rule| {
-            rule.get_filetypes()
-                .filter(|filetypes| filetypes.iter().any(|filetype| path.ends_with(filetype)))
-                .is_some()
-        })
-        .map(RuleScore::from)
-        .collect();
-
-    Ok(FileScanResult::new(path.to_path_buf(), rules))
-}
-
-/// Scan a zipfile against the given rule set
-pub fn scan_zip(zip: &mut ZipType, rules: &Rules) -> Result<Vec<FileScanResult>, DragonflyError> {
-    let mut file_scan_results = Vec::new();
-    for idx in 0..zip.len() {
-        let mut file = zip.by_index(idx)?;
-        let path = PathBuf::from(file.name());
-        let scan_results = scan_file(&mut file, &path, rules)?;
-        file_scan_results.push(scan_results);
-    }
-
-    Ok(file_scan_results)
-}
-
-/// Scan a tarball against the given rule set
-pub fn scan_tarball(
-    tar: &mut TarballType,
-    rules: &Rules,
-) -> Result<Vec<FileScanResult>, DragonflyError> {
-    let file_scan_results = tar
-        .entries()?
-        .filter_map(Result::ok)
-        .map(|mut tarfile| {
-            let path = tarfile.path()?.to_path_buf();
-            scan_file(&mut tarfile, &path, rules)
-        })
-        .filter_map(Result::ok)
-        .collect();
-
-    Ok(file_scan_results)
-}
-
 /// Scan all the distributions of the given job against the given ruleset
 ///
 /// Uses the provided HTTP client to download each distribution.
@@ -256,20 +248,14 @@ pub fn scan_all_distributions(
         let download_url: Url = distribution.parse().unwrap();
         let inspector_url = create_inspector_url(&job.name, &job.version, &download_url);
 
-        let mut dist = if distribution.ends_with(".tar.gz") {
-            let file = fetch_tarball(http_client, &download_url)?;
-            Distribution::Tar {
-                file,
-                inspector_url,
-            }
-        } else {
-            let file = fetch_zipfile(http_client, &download_url)?;
-            Distribution::Zip {
-                file,
-                inspector_url,
-            }
+        let mut dist = Distribution {
+            file: if distribution.ends_with(".tar.gz") {
+                Box::new(fetch_tarball(http_client, &download_url)?)
+            } else {
+                Box::new(fetch_zipfile(http_client, &download_url)?)
+            },
+            inspector_url,
         };
-
         let distribution_scan_result = dist.scan(rules)?;
         distribution_scan_results.push(distribution_scan_result);
     }
