@@ -49,10 +49,10 @@ pub struct AuthResponse {
 
 #[derive(Debug, Serialize)]
 pub struct AuthBody<'a> {
-    pub client_id: &'a String,
-    pub client_secret: &'a String,
-    pub audience: &'a String,
-    pub grant_type: &'a String,
-    pub username: &'a String,
-    pub password: &'a String,
+    pub client_id: &'a str,
+    pub client_secret: &'a str,
+    pub audience: &'a str,
+    pub grant_type: &'a str,
+    pub username: &'a str,
+    pub password: &'a str,
 }
