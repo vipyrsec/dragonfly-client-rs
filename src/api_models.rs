@@ -8,7 +8,11 @@ pub struct SubmitJobResultsBody<'a> {
     pub version: &'a str,
     pub score: i64,
     pub inspector_url: Option<&'a str>,
+
+    /// Contains all rule identifiers matched for the entire release.
     pub rules_matched: &'a Vec<&'a str>,
+
+    /// The commit hash of the ruleset used to produce these results.
     pub commit: &'a str,
 }
 

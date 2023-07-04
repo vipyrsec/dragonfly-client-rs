@@ -7,6 +7,7 @@ use crate::{
 use flate2::read::GzDecoder;
 use reqwest::{blocking::Client, StatusCode, Url};
 use std::{
+    collections::HashSet,
     io::{Cursor, Read},
     sync::{RwLock, RwLockWriteGuard},
     time::Duration,
@@ -163,11 +164,17 @@ impl DragonflyClient {
         let score = highest_score_distribution
             .map(DistributionScanResults::get_total_score)
             .unwrap_or_default();
+
         let inspector_url =
             highest_score_distribution.and_then(DistributionScanResults::inspector_url);
-        let rules_matched = highest_score_distribution
-            .map(DistributionScanResults::get_matched_rule_identifiers)
-            .unwrap_or_default();
+
+        // collect all rule identifiers into a HashSet to dedup, then convert to Vec
+        let rules_matched = distribution_scan_results
+            .iter()
+            .flat_map(DistributionScanResults::get_matched_rule_identifiers)
+            .collect::<HashSet<&str>>()
+            .into_iter()
+            .collect();
 
         let body = SubmitJobResultsBody {
             name: &job.name,
