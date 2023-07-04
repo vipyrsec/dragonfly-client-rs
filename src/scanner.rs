@@ -117,7 +117,7 @@ impl DistributionScanResults {
         self.get_matched_rules().iter().map(|rule| rule.score).sum()
     }
 
-    /// Get a vector over the identifiers of the all **unique** rules this distribution matched
+    /// Get a vector of the **unique** rule identifiers this distribution matched
     pub fn get_matched_rule_identifiers(&self) -> Vec<&str> {
         self.get_matched_rules()
             .iter()
