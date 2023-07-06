@@ -6,7 +6,7 @@ mod error;
 mod scanner;
 mod utils;
 
-use std::{sync::Arc, thread, time::Duration};
+use std::{sync::{Arc, TryLockError}, thread, time::Duration};
 
 use api::DragonflyClient;
 use api_models::Job;
@@ -20,18 +20,22 @@ fn runner(client: &DragonflyClient, job: &Job) -> Result<(), DragonflyError> {
     info!("Starting job {}@{}", job.name, job.version);
 
  
-    let state = client.state.read().unwrap();
-    if state.hash != job.hash {
-        info!(
-            "Rules are outdated: attempting to update from {} to {}.",
-            state.hash, job.hash
-        );
-        drop(state);
+    match client.state.try_read() {
+        Ok(state) => if state.hash == job.hash {
+            drop(state);
+        } else {
+            info!("Rules are outdated: attempting to update from {} to {}.", state.hash, job.hash);
+            
+            // Drop the read lock because `client.update_rules` attempts to get a write lock
+            drop(state);
 
-        client.update_rules()?;
-        info!("Successfully synced state!");
-    } else {
-        drop(state);
+            client.update_rules()?;
+            info!("Successfully synced state!");
+        },
+
+        Err(TryLockError::WouldBlock) => {}, // Some other thread is updating, so we don't have to
+
+        Err(_) => error!("Poisoned lock while trying to acquire read lock!"),
     }
 
     // Acquire a ReadGuard for scanning and sending results
