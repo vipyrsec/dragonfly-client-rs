@@ -20,12 +20,15 @@ fn runner(client: &DragonflyClient, job: &Job) -> Result<(), DragonflyError> {
     debug!("Starting job {}@{}", job.name, job.version);
 
     let state = client.state.write().unwrap();
-    if state.hash != job.hash {
+
+    if state.hash == job.hash {
+        // if we don't need to update, drop the WriteGuard...
+        drop(state);
+    } else {
         info!(
             "Rules are outdated: attempting to update from {} to {}.",
             state.hash, job.hash
         );
-
         // give ownership of WriteGuard to update_rules...
         client.update_rules(state)?;
         info!("Successfully synced state!");
