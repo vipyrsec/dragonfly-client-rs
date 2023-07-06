@@ -12,30 +12,35 @@ use api::DragonflyClient;
 use api_models::Job;
 use error::DragonflyError;
 use threadpool::ThreadPool;
-use tracing::{debug, error, info, span, Level};
+use tracing::{error, info, span, Level};
 
 use crate::{common::APP_CONFIG, scanner::scan_all_distributions};
 
 fn runner(client: &DragonflyClient, job: &Job) -> Result<(), DragonflyError> {
-    debug!("Starting job {}@{}", job.name, job.version);
+    info!("Starting job {}@{}", job.name, job.version);
 
-    let state = client.state.write().unwrap();
+ 
+    let state = client.state.read().unwrap();
     if state.hash != job.hash {
         info!(
             "Rules are outdated: attempting to update from {} to {}.",
             state.hash, job.hash
         );
+        drop(state);
 
-        // give ownership of WriteGuard to update_rules...
-        client.update_rules(state)?;
+        client.update_rules()?;
         info!("Successfully synced state!");
+    } else {
+        drop(state);
     }
 
-    // then acquire a ReadGuard for scanning and sending results
+    // Acquire a ReadGuard for scanning and sending results
     let state = client.state.read().unwrap();
 
     let distribution_scan_results =
         scan_all_distributions(client.get_http_client(), &state.rules, job)?;
+
+    info!("Sending success HTTP response");
     client.send_success(job, &distribution_scan_results)?;
 
     info!("Successfully sent results upstream");

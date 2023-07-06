@@ -9,7 +9,7 @@ use reqwest::{blocking::Client, StatusCode, Url};
 use std::{
     collections::HashSet,
     io::{Cursor, Read},
-    sync::{RwLock, RwLockWriteGuard},
+    sync::RwLock,
     time::Duration,
 };
 use tracing::{error, info, warn};
@@ -99,7 +99,8 @@ impl DragonflyClient {
     ///
     /// This function takes ownership of a [`RwLockWriteGuard`] and drops it when finished. This
     /// guarantees only one thread can update the rules at once.
-    pub fn update_rules(&self, mut state: RwLockWriteGuard<State>) -> Result<(), DragonflyError> {
+    pub fn update_rules(&self) -> Result<(), DragonflyError> {
+        let mut state = self.state.write().unwrap();
         let (hash, rules) = Self::fetch_rules(self.get_http_client(), &state.access_token)?;
 
         state.hash = hash;
@@ -220,7 +221,6 @@ impl DragonflyClient {
             username: &APP_CONFIG.username,
             password: &APP_CONFIG.password,
         };
-
         let res: AuthResponse = http_client
             .post(url)
             .json(&json_body)
