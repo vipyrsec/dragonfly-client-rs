@@ -1,24 +1,19 @@
 use crate::{
-    api_models::SubmitJobResultsError,
+    api_models::{SubmitJobResultsError, SubmitJobResultsSuccess},
     common::{TarballType, ZipType},
-    scanner::DistributionScanResults,
     APP_CONFIG,
 };
 use flate2::read::GzDecoder;
-use reqwest::{blocking::Client, StatusCode, Url};
+use reqwest::{blocking::Client, Url};
 use std::{
-    collections::HashSet,
     io::{Cursor, Read},
     sync::RwLock,
     time::Duration,
 };
 use tracing::{error, info, warn};
-use yara::{Compiler, Rules};
 
 use crate::{
-    api_models::{
-        AuthBody, AuthResponse, GetJobResponse, GetRulesResponse, Job, SubmitJobResultsBody,
-    },
+    api_models::{AuthBody, AuthResponse, GetJobResponse, GetRulesResponse, Job},
     error::DragonflyError,
 };
 
@@ -39,29 +34,100 @@ pub struct DragonflyClient {
     pub state: RwLock<State>,
 }
 
+// The following are methods that are "low level" to the API
+// They simply send requests to the API and receive responses.
+// Their counterpart methods in the DragonflyClient struct
+// provide some abstractions on top of these methods such as
+// credential checking, revalidating, easier data access, etc...
+
+fn fetch_access_token(http_client: &Client) -> reqwest::Result<AuthResponse> {
+    let url = format!("https://{}/oauth/token", APP_CONFIG.auth0_domain);
+    let json_body = AuthBody {
+        client_id: &APP_CONFIG.client_id,
+        client_secret: &APP_CONFIG.client_secret,
+        audience: &APP_CONFIG.audience,
+        grant_type: &APP_CONFIG.grant_type,
+        username: &APP_CONFIG.username,
+        password: &APP_CONFIG.password,
+    };
+
+    http_client
+        .post(url)
+        .json(&json_body)
+        .send()?
+        .error_for_status()?
+        .json()
+}
+
+fn fetch_job(http_client: &Client, access_token: &str) -> reqwest::Result<GetJobResponse> {
+    http_client
+        .post(format!("{}/job", APP_CONFIG.base_url))
+        .header("Authorization", format!("Bearer {access_token}"))
+        .send()?
+        .error_for_status()?
+        .json()
+}
+
+fn fetch_rules(http_client: &Client, access_token: &str) -> reqwest::Result<GetRulesResponse> {
+    http_client
+        .get(format!("{}/rules", APP_CONFIG.base_url))
+        .header("Authorization", format!("Bearer {access_token}"))
+        .send()?
+        .error_for_status()?
+        .json()
+}
+
+fn send_success(
+    http_client: &Client,
+    access_token: &str,
+    body: &SubmitJobResultsSuccess,
+) -> reqwest::Result<()> {
+    http_client
+        .put(format!("{}/package", APP_CONFIG.base_url))
+        .header("Authorization", format!("Bearer {access_token}"))
+        .json(&body)
+        .send()?
+        .error_for_status()?;
+
+    Ok(())
+}
+
+fn send_error(
+    http_client: &Client,
+    access_token: &str,
+    body: &SubmitJobResultsError,
+) -> reqwest::Result<()> {
+    http_client
+        .put(format!("{}/package", APP_CONFIG.base_url))
+        .header("Authorization", format!("Bearer {access_token}"))
+        .json(&body)
+        .send()?
+        .error_for_status()?;
+
+    Ok(())
+}
+
 impl DragonflyClient {
     pub fn new() -> Result<Self, DragonflyError> {
         let client = Client::builder().gzip(true).build()?;
 
-        let access_token = Self::fetch_access_token(&client)?;
-        let (hash, rules) = Self::fetch_rules(&client, &access_token)?;
+        let auth_response = fetch_access_token(&client)?;
+        let rules_response = fetch_rules(&client, &auth_response.access_token)?;
         let state = State {
-            rules,
-            hash,
-            access_token,
+            rules: rules_response.compile()?,
+            hash: rules_response.hash,
+            access_token: auth_response.access_token,
         }
         .into();
 
         Ok(Self { client, state })
     }
 
-    /// Update the state with a new access token
+    /// Update the state with a new access token, using the given write lock [`RwLockWriteGuard`]
     ///
     /// If an error occurs while reauthenticating, the function retries with an exponential backoff
     /// described by the equation `min(10 * 60, 2^(x - 1))` where `x` is the number of failed tries.
-    pub fn reauthenticate(&self) {
-        let mut state = self.state.write().unwrap();
-
+    pub fn reauthenticate(&self) -> String {
         let access_token;
 
         let base = 2_f64;
@@ -69,10 +135,10 @@ impl DragonflyClient {
         let mut tries = 0;
 
         loop {
-            let r = Self::fetch_access_token(self.get_http_client());
+            let r = fetch_access_token(self.get_http_client());
             match r {
-                Ok(at) => {
-                    access_token = at;
+                Ok(authentication_response) => {
+                    access_token = authentication_response.access_token;
                     break;
                 }
                 Err(e) => {
@@ -92,168 +158,63 @@ impl DragonflyClient {
         }
 
         info!("Successfully reauthenticated.");
-        state.access_token = access_token;
+        access_token
     }
 
-    /// Update the global ruleset.
-    ///
-    /// This function takes ownership of a [`RwLockWriteGuard`] and drops it when finished. This
-    /// guarantees only one thread can update the rules at once.
+    /// Update the global ruleset. Waits for a write lock.
     pub fn update_rules(&self) -> Result<(), DragonflyError> {
         let mut state = self.state.write().unwrap();
-        let (hash, rules) = Self::fetch_rules(self.get_http_client(), &state.access_token)?;
-
-        state.hash = hash;
-        state.rules = rules;
+        let rules_response = fetch_rules(self.get_http_client(), &state.access_token)?;
+        state.rules = rules_response.compile()?;
+        state.hash = rules_response.hash;
 
         Ok(())
     }
 
     /// Fetch a job. None if the server has nothing for us to do.
-    pub fn get_job(&self) -> reqwest::Result<Option<Job>> {
-        let access_token = &self.state.read().unwrap().access_token;
-        let res: GetJobResponse = self
-            .client
-            .post(format!("{}/job", APP_CONFIG.base_url))
-            .header("Authorization", format!("Bearer {access_token}"))
-            .send()?
-            .error_for_status()?
-            .json()?;
+    pub fn get_job(&self) -> Result<Option<Job>, DragonflyError> {
+        let state = self.state.read().unwrap();
+        match fetch_job(self.get_http_client(), &state.access_token) {
+            Ok(GetJobResponse::Job(job)) => Ok(Some(job)),
+            Ok(GetJobResponse::Error { .. }) => Ok(None),
+            Err(err) => Err(err.into()),
+        }
+    }
 
-        let job = match res {
-            GetJobResponse::Job(job) => Some(job),
-            GetJobResponse::Error { .. } => None,
-        };
+    pub fn bulk_get_job(&self, num_jobs: usize) -> Vec<Job> {
+        let state = self.state.read().unwrap();
+        let mut jobs = Vec::new();
+        for _ in 0..num_jobs {
+            match fetch_job(self.get_http_client(), &state.access_token) {
+                Ok(GetJobResponse::Job(job)) => jobs.push(job),
+                Ok(GetJobResponse::Error { .. }) => {}
+                Err(err) => error!("Unexpected error while bulk fetching job: {err}"),
+            }
+        }
 
-        Ok(job)
+        jobs
     }
 
     /// Report an error to the server.
-    pub fn send_error(&self, job: &Job, reason: &str) -> reqwest::Result<()> {
-        let access_token = &self.state.read().unwrap().access_token;
-
-        let body = SubmitJobResultsError {
-            name: &job.name,
-            version: &job.version,
-            reason,
-        };
-
-        self.client
-            .put(format!("{}/package", APP_CONFIG.base_url))
-            .header("Authorization", format!("Bearer {access_token}"))
-            .json(&body)
-            .send()?
-            .error_for_status()?;
+    pub fn send_error(&self, body: &SubmitJobResultsError) -> Result<(), DragonflyError> {
+        let state = self.state.read().unwrap();
+        send_error(self.get_http_client(), &state.access_token, body)?;
 
         Ok(())
     }
 
     /// Submit the results of a scan to the server, given the job and the scan results of each
     /// distribution
-    pub fn send_success(
-        &self,
-        job: &Job,
-        distribution_scan_results: &[DistributionScanResults],
-    ) -> reqwest::Result<()> {
+    pub fn send_success(&self, body: &SubmitJobResultsSuccess) -> Result<(), DragonflyError> {
         let state = self.state.read().unwrap();
-        let access_token = &state.access_token;
+        send_success(self.get_http_client(), &state.access_token, &body)?;
 
-        let highest_score_distribution = distribution_scan_results
-            .iter()
-            .max_by_key(|distrib| distrib.get_total_score());
-
-        let score = highest_score_distribution
-            .map(DistributionScanResults::get_total_score)
-            .unwrap_or_default();
-
-        let inspector_url =
-            highest_score_distribution.and_then(DistributionScanResults::inspector_url);
-
-        // collect all rule identifiers into a HashSet to dedup, then convert to Vec
-        let rules_matched = distribution_scan_results
-            .iter()
-            .flat_map(DistributionScanResults::get_matched_rule_identifiers)
-            .collect::<HashSet<&str>>()
-            .into_iter()
-            .collect();
-
-        let body = SubmitJobResultsBody {
-            name: &job.name,
-            version: &job.version,
-            score,
-            inspector_url: inspector_url.as_deref(),
-            rules_matched: &rules_matched,
-            commit: &state.hash,
-        };
-
-        info!("Results for this scan: {body:#?}");
-
-        let r = self
-            .client
-            .put(format!("{}/package", APP_CONFIG.base_url))
-            .header("Authorization", format!("Bearer {access_token}"))
-            .json(&body)
-            .send()?
-            .error_for_status();
-
-        match r {
-            Ok(_) => Ok(()),
-            Err(e) if e.status() == Some(StatusCode::UNAUTHORIZED) => {
-                self.reauthenticate();
-                Ok(())
-            }
-            Err(e) => Err(e),
-        }
+        Ok(())
     }
 
     /// Return a reference to the underlying HTTP Client
     pub fn get_http_client(&self) -> &Client {
         &self.client
-    }
-
-    fn fetch_access_token(http_client: &Client) -> reqwest::Result<String> {
-        let url = format!("https://{}/oauth/token", APP_CONFIG.auth0_domain);
-        let json_body = AuthBody {
-            client_id: &APP_CONFIG.client_id,
-            client_secret: &APP_CONFIG.client_secret,
-            audience: &APP_CONFIG.audience,
-            grant_type: &APP_CONFIG.grant_type,
-            username: &APP_CONFIG.username,
-            password: &APP_CONFIG.password,
-        };
-        let res: AuthResponse = http_client
-            .post(url)
-            .json(&json_body)
-            .send()?
-            .error_for_status()?
-            .json()?;
-
-        Ok(res.access_token)
-    }
-
-    fn fetch_rules(
-        http_client: &Client,
-        access_token: &str,
-    ) -> Result<(String, Rules), DragonflyError> {
-        let res: GetRulesResponse = http_client
-            .get(format!("{}/rules", APP_CONFIG.base_url))
-            .header("Authorization", format!("Bearer {access_token}"))
-            .send()?
-            .error_for_status()?
-            .json()?;
-
-        let rules_str = res
-            .rules
-            .values()
-            .cloned()
-            .collect::<Vec<String>>()
-            .join("\n");
-
-        let compiled_rules = Compiler::new()?
-            .add_rules_str(&rules_str)?
-            .compile_rules()?;
-
-        Ok((res.hash, compiled_rules))
     }
 }
 

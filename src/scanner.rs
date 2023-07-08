@@ -9,7 +9,7 @@ use yara::{MetadataValue, Rule, Rules};
 
 use crate::{
     api::{fetch_tarball, fetch_zipfile},
-    api_models::Job,
+    api_models::{Job, SubmitJobResultsSuccess},
     common::{TarballType, ZipType},
     error::DragonflyError,
     utils::create_inspector_url,
@@ -110,12 +110,17 @@ struct Distribution {
 }
 
 impl Distribution {
-    fn scan(&mut self, rules: &Rules) -> Result<DistributionScanResults, DragonflyError> {
+    fn scan(
+        &mut self,
+        rules: &Rules,
+        hash: &str,
+    ) -> Result<DistributionScanResults, DragonflyError> {
         let results = self.file.scan(rules)?;
 
         Ok(DistributionScanResults::new(
             results,
             self.inspector_url.clone(),
+            hash.to_string(),
         ))
     }
 }
@@ -128,15 +133,23 @@ pub struct DistributionScanResults {
 
     /// The inspector URL pointing to this distribution's base
     inspector_url: Url,
+
+    /// The commit hash of the rules used to scan this distribution
+    commit_hash: String,
 }
 
 impl DistributionScanResults {
-    /// Create a new `DistributionScanResults` based off the results of its files and the base
-    /// inspector URL
-    pub fn new(file_scan_results: Vec<FileScanResult>, inspector_url: Url) -> Self {
+    /// Create a new `DistributionScanResults` based off the results of its files, the base
+    /// inspector URL for this distribution, and the commit hash used to scan.
+    pub fn new(
+        file_scan_results: Vec<FileScanResult>,
+        inspector_url: Url,
+        commit_hash: String,
+    ) -> Self {
         Self {
             file_scan_results,
             inspector_url,
+            commit_hash,
         }
     }
 
@@ -187,6 +200,61 @@ impl DistributionScanResults {
                 file.path.to_string_lossy().as_ref()
             )
         })
+    }
+}
+
+pub struct PackageScanResults {
+    pub name: String,
+    pub version: String,
+    pub distribution_scan_results: Vec<DistributionScanResults>,
+    pub commit_hash: String,
+}
+
+impl PackageScanResults {
+    pub fn new(
+        name: String,
+        version: String,
+        distribution_scan_results: Vec<DistributionScanResults>,
+        commit_hash: String,
+    ) -> Self {
+        Self {
+            name,
+            version,
+            distribution_scan_results,
+            commit_hash,
+        }
+    }
+
+    /// Format the package scan results into something that can be sent over the API
+    pub fn build_body(&self) -> SubmitJobResultsSuccess {
+        let highest_score_distribution = self
+            .distribution_scan_results
+            .iter()
+            .max_by_key(|distrib| distrib.get_total_score());
+
+        let score = highest_score_distribution
+            .map(DistributionScanResults::get_total_score)
+            .unwrap_or_default();
+
+        let inspector_url =
+            highest_score_distribution.and_then(DistributionScanResults::inspector_url);
+
+        // collect all rule identifiers into a HashSet to dedup, then convert to Vec
+        let rules_matched = self
+            .distribution_scan_results
+            .iter()
+            .flat_map(DistributionScanResults::get_matched_rule_identifiers)
+            .map(|i| i.to_string())
+            .collect::<Vec<String>>();
+
+        SubmitJobResultsSuccess {
+            name: self.name.clone(),
+            version: self.version.clone(),
+            score,
+            inspector_url,
+            rules_matched,
+            commit: self.commit_hash.clone(),
+        }
     }
 }
 
@@ -244,6 +312,7 @@ impl From<Rule<'_>> for RuleScore {
 pub fn scan_all_distributions(
     http_client: &Client,
     rules: &Rules,
+    commit_hash: &str,
     job: &Job,
 ) -> Result<Vec<DistributionScanResults>, DragonflyError> {
     let mut distribution_scan_results = Vec::with_capacity(job.distributions.len());
@@ -259,7 +328,7 @@ pub fn scan_all_distributions(
             },
             inspector_url,
         };
-        let distribution_scan_result = dist.scan(rules)?;
+        let distribution_scan_result = dist.scan(rules, commit_hash)?;
         distribution_scan_results.push(distribution_scan_result);
     }
 

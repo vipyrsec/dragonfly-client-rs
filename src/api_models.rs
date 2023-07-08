@@ -1,26 +1,34 @@
 use serde::Serialize;
 use serde::{self, Deserialize};
 use std::collections::HashMap;
+use yara::{Compiler, Rules};
+
+use crate::error::DragonflyError;
 
 #[derive(Debug, Serialize)]
-pub struct SubmitJobResultsBody<'a> {
-    pub name: &'a str,
-    pub version: &'a str,
+pub struct SubmitJobResultsSuccess {
+    pub name: String,
+    pub version: String,
     pub score: i64,
-    pub inspector_url: Option<&'a str>,
+    pub inspector_url: Option<String>,
 
     /// Contains all rule identifiers matched for the entire release.
-    pub rules_matched: &'a Vec<&'a str>,
+    pub rules_matched: Vec<String>,
 
     /// The commit hash of the ruleset used to produce these results.
-    pub commit: &'a str,
+    pub commit: String,
 }
 
 #[derive(Debug, Serialize)]
-pub struct SubmitJobResultsError<'a> {
-    pub name: &'a str,
-    pub version: &'a str,
-    pub reason: &'a str,
+pub struct SubmitJobResultsError {
+    pub name: String,
+    pub version: String,
+    pub reason: String,
+}
+
+pub enum SubmitJobResultsBody {
+    Success(SubmitJobResultsSuccess),
+    Error(SubmitJobResultsError),
 }
 
 #[derive(Debug, Deserialize)]
@@ -42,6 +50,24 @@ pub enum GetJobResponse {
 pub struct GetRulesResponse {
     pub hash: String,
     pub rules: HashMap<String, String>,
+}
+
+impl GetRulesResponse {
+    /// Compile the rules from the response
+    pub fn compile(&self) -> Result<Rules, DragonflyError> {
+        let rules_str = self
+            .rules
+            .values()
+            .map(String::as_ref)
+            .collect::<Vec<&str>>()
+            .join("\n");
+
+        let compiled_rules = Compiler::new()?
+            .add_rules_str(&rules_str)?
+            .compile_rules()?;
+
+        Ok(compiled_rules)
+    }
 }
 
 #[derive(Debug, Deserialize)]
