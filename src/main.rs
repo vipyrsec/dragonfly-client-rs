@@ -29,7 +29,7 @@ use crate::{
 
 /// The actual scanning logic. Takes the job to be scanned, the compiled rules, the commit hash
 /// being used, and the HTTP client (for downloading distributions), and returns the `PackageScanResults`
-fn runner(
+fn scanner(
     http_client: &Client,
     job: &Job,
     rules: &Rules,
@@ -48,33 +48,31 @@ fn runner(
 }
 
 fn loader(client: &DragonflyClient, queue: &mut VecDeque<Job>) {
-    loop {
-        info!("Fetching {} bulk jobs...", APP_CONFIG.bulk_size);
-        match client.bulk_get_job(APP_CONFIG.bulk_size) {
-            Ok(jobs) => {
-                if jobs.is_empty() {
-                    info!("Bulk job request returned no jobs");
-                }
-
-                for job in jobs {
-                    info!("Pushing {} v{} onto queue", job.name, job.version);
-                    if job.hash != client.state.read().unwrap().hash {
-                        info!("Detected job hash mismatch, attempting to sync rules");
-                        if let Err(err) = client.update_rules() {
-                            error!("Error while updating rules: {err}");
-                        }
-                    }
-                    queue.push_back(job);
-                }
-
-                info!("Finished loading jobs into queue!");
+    info!("Fetching {} bulk jobs...", APP_CONFIG.bulk_size);
+    match client.bulk_get_job(APP_CONFIG.bulk_size) {
+        Ok(jobs) => {
+            if jobs.is_empty() {
+                info!("Bulk job request returned no jobs");
             }
 
-            Err(err) => error!("Unexpected HTTP error: {err}"),
+            for job in jobs {
+                info!("Pushing {} v{} onto queue", job.name, job.version);
+                if job.hash != client.state.read().unwrap().hash {
+                    info!("Detected job hash mismatch, attempting to sync rules");
+                    if let Err(err) = client.update_rules() {
+                        error!("Error while updating rules: {err}");
+                    }
+                }
+                queue.push_back(job);
+            }
+
+            info!("Finished loading jobs into queue!");
         }
 
-        std::thread::sleep(Duration::from_secs(APP_CONFIG.load_duration));
+        Err(err) => error!("Unexpected HTTP error: {err}"),
     }
+
+    std::thread::sleep(Duration::from_secs(APP_CONFIG.load_duration));
 }
 
 fn main() -> Result<(), DragonflyError> {
@@ -92,7 +90,10 @@ fn main() -> Result<(), DragonflyError> {
         let client = Arc::clone(&client);
         let queue = Arc::clone(&queue);
         info!("Starting loader thread");
-        move || loader(&client, &mut queue.lock().unwrap())
+        move || loop {
+            loader(&client, &mut queue.lock().unwrap());
+            std::thread::sleep(Duration::from_secs(APP_CONFIG.load_duration));
+        }
     });
 
     // These threads do the actual scanning and send results over a channel
@@ -110,7 +111,7 @@ fn main() -> Result<(), DragonflyError> {
                     let _enter = span.enter();
                     info!("Successfuly got job from queue!");
                     let send_result =
-                        match runner(client.get_http_client(), &job, &state.rules, &state.hash) {
+                        match scanner(client.get_http_client(), &job, &state.rules, &state.hash) {
                             Ok(package_scan_results) => tx.send(SubmitJobResultsBody::Success(
                                 package_scan_results.build_body(),
                             )),
