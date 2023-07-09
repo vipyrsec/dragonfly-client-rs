@@ -66,3 +66,7 @@ Below are a list of environment variables that need to be configured, and what t
 | `DRAGONFLY_CLIENT_SECRET` |                                  | Auth0 client secret                       |
 | `DRAGONFLY_USERNAME`      |                                  | Provisioned username                      |
 | `DRAGONFLY_PASSWORD`      |                                  | Provisioned password                      |
+| `DRAGONFLY_THREADS`       | Available paralellism / `1`      | Attemps to auto-detect the amount of threads, or defaults to 1 if not possible |
+| `DRAGONFLY_WAIT_DURATION` | 10                               | Seconds to wait between each internal queue check  |
+| `DRAGONFLY_LOAD_DURATION` | 60                               | Seconds to wait between each API job request |
+| `DRAGONFLY_BULK_SIZE`     | 20                               | The amount of jobs to request at once and load into the internal queue |
