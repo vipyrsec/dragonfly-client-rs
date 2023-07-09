@@ -214,7 +214,7 @@ impl DragonflyClient {
                 state.access_token = new_access_token;
                 info!("Successfully updated local access token to new one!");
                 info!("Sending success body again...");
-                send_error(self.get_http_client(), &state.access_token, &body)
+                send_error(self.get_http_client(), &state.access_token, body)
             }
 
             other => other,
@@ -225,7 +225,7 @@ impl DragonflyClient {
     /// distribution
     pub fn send_success(&self, body: &SubmitJobResultsSuccess) -> reqwest::Result<()> {
         let state = self.state.read().unwrap();
-        match send_success(self.get_http_client(), &state.access_token, &body) {
+        match send_success(self.get_http_client(), &state.access_token, body) {
             Err(http_err) if http_err.status() == Some(StatusCode::UNAUTHORIZED) => {
                 drop(state); // Drop the read lock
                 info!("Got 401 UNAUTHORIZED while sending success");
@@ -238,7 +238,7 @@ impl DragonflyClient {
                 state.access_token = new_access_token;
                 info!("Successfully updated local access token to new one!");
                 info!("Sending success body again");
-                send_success(self.get_http_client(), &state.access_token, &body)
+                send_success(self.get_http_client(), &state.access_token, body)
             }
 
             other => other,

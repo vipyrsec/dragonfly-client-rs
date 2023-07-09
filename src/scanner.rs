@@ -203,7 +203,7 @@ impl PackageScanResults {
             .distribution_scan_results
             .iter()
             .flat_map(DistributionScanResults::get_matched_rule_identifiers)
-            .map(|i| i.to_string())
+            .map(std::string::ToString::to_string)
             .collect::<Vec<String>>();
 
         SubmitJobResultsSuccess {

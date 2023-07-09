@@ -47,6 +47,36 @@ fn runner(
     Ok(package_scan_result)
 }
 
+fn loader(client: &DragonflyClient, queue: &mut VecDeque<Job>) {
+    loop {
+        info!("Fetching {} bulk jobs...", APP_CONFIG.bulk_size);
+        match client.bulk_get_job(APP_CONFIG.bulk_size) {
+            Ok(jobs) => {
+                if jobs.is_empty() {
+                    info!("Bulk job request returned no jobs");
+                }
+
+                for job in jobs {
+                    info!("Pushing {} v{} onto queue", job.name, job.version);
+                    if job.hash != client.state.read().unwrap().hash {
+                        info!("Detected job hash mismatch, attempting to sync rules");
+                        if let Err(err) = client.update_rules() {
+                            error!("Error while updating rules: {err}");
+                        }
+                    }
+                    queue.push_back(job);
+                }
+
+                info!("Finished loading jobs into queue!");
+            }
+
+            Err(err) => error!("Unexpected HTTP error: {err}"),
+        }
+
+        std::thread::sleep(Duration::from_secs(APP_CONFIG.load_duration));
+    }
+}
+
 fn main() -> Result<(), DragonflyError> {
     tracing_subscriber::fmt().init();
     let client = Arc::new(DragonflyClient::new()?);
@@ -62,36 +92,7 @@ fn main() -> Result<(), DragonflyError> {
         let client = Arc::clone(&client);
         let queue = Arc::clone(&queue);
         info!("Starting loader thread");
-        move || loop {
-            info!("Fetching {} bulk jobs...", APP_CONFIG.bulk_size);
-            match client.bulk_get_job(APP_CONFIG.bulk_size) {
-                Ok(jobs) => {
-                    info!("Waiting for mutex lock on queue to push jobs");
-                    let mut queue = queue.lock().unwrap();
-
-                    if jobs.is_empty() {
-                        info!("Bulk job request returned no jobs");
-                    }
-
-                    for job in jobs {
-                        info!("Pushing {} v{} onto queue", job.name, job.version);
-                        if job.hash != client.state.read().unwrap().hash {
-                            info!("Detected job hash mismatch, attempting to sync rules");
-                            if let Err(err) = client.update_rules() {
-                                error!("Error while updating rules: {err}");
-                            }
-                        }
-                        queue.push_back(job);
-                    }
-
-                    info!("Finished loading jobs into queue!");
-                }
-
-                Err(err) => error!("Unexpected HTTP error: {err}"),
-            }
-
-            std::thread::sleep(Duration::from_secs(APP_CONFIG.load_duration));
-        }
+        move || loader(&client, &mut queue.lock().unwrap())
     });
 
     // These threads do the actual scanning and send results over a channel
@@ -134,7 +135,7 @@ fn main() -> Result<(), DragonflyError> {
                 }
                 Err(_) => error!("Queue lock is poisoned!"),
             }
-        })
+        });
     }
 
     // This loop continuously recieves results from the mpsc channel and sends it upstream
