@@ -1,4 +1,4 @@
-use yara::{Rule, MetadataValue};
+use yara::{MetadataValue, Rule};
 
 use crate::scanner::RuleScore;
 

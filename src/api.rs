@@ -4,7 +4,7 @@ use crate::{
     APP_CONFIG,
 };
 use flate2::read::GzDecoder;
-use reqwest::{blocking::Client, Url, StatusCode};
+use reqwest::{blocking::Client, StatusCode, Url};
 use std::{
     io::{Cursor, Read},
     sync::RwLock,
@@ -59,7 +59,11 @@ fn fetch_access_token(http_client: &Client) -> reqwest::Result<AuthResponse> {
         .json()
 }
 
-fn fetch_bulk_job(http_client: &Client, access_token: &str, n_jobs: usize) -> reqwest::Result<Vec<Job>> {
+fn fetch_bulk_job(
+    http_client: &Client,
+    access_token: &str,
+    n_jobs: usize,
+) -> reqwest::Result<Vec<Job>> {
     http_client
         .post(format!("{}/jobs", APP_CONFIG.base_url))
         .header("Authorization", format!("Bearer {access_token}"))
@@ -188,17 +192,16 @@ impl DragonflyClient {
                 info!("Successfully updated local access token to new one!");
                 info!("Doing a bulk fetch job again...");
                 fetch_bulk_job(self.get_http_client(), &state.access_token, n_jobs)
-
             }
 
-            other => other
+            other => other,
         }
     }
 
     /// Report an error to the server.
     pub fn send_error(&self, body: &SubmitJobResultsError) -> reqwest::Result<()> {
         let state = self.state.read().unwrap();
-        match send_error(self.get_http_client(), &state.access_token, body)  {
+        match send_error(self.get_http_client(), &state.access_token, body) {
             Err(http_err) if http_err.status() == Some(StatusCode::UNAUTHORIZED) => {
                 drop(state); // Drop the read lock
                 info!("Got 401 UNAUTHORIZED while sending success");
@@ -214,7 +217,7 @@ impl DragonflyClient {
                 send_error(self.get_http_client(), &state.access_token, &body)
             }
 
-            other => other
+            other => other,
         }
     }
 
@@ -238,7 +241,7 @@ impl DragonflyClient {
                 send_success(self.get_http_client(), &state.access_token, &body)
             }
 
-            other => other
+            other => other,
         }
     }
 

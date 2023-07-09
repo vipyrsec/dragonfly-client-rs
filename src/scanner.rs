@@ -12,7 +12,8 @@ use crate::{
     api_models::{Job, SubmitJobResultsSuccess},
     common::{TarballType, ZipType},
     error::DragonflyError,
-    utils::create_inspector_url, exts::RuleExt,
+    exts::RuleExt,
+    utils::create_inspector_url,
 };
 
 #[derive(Debug, Hash, Eq, PartialEq)]
@@ -38,7 +39,6 @@ impl FileScanResult {
         self.rules.iter().map(|i| i.score).sum()
     }
 }
-
 
 /// Scan an archive format using Yara rules.
 trait Scan {
@@ -84,10 +84,7 @@ struct Distribution {
 }
 
 impl Distribution {
-    fn scan(
-        &mut self,
-        rules: &Rules,
-    ) -> Result<DistributionScanResults, DragonflyError> {
+    fn scan(&mut self, rules: &Rules) -> Result<DistributionScanResults, DragonflyError> {
         let results = self.file.scan(rules)?;
 
         Ok(DistributionScanResults::new(
@@ -110,10 +107,7 @@ pub struct DistributionScanResults {
 impl DistributionScanResults {
     /// Create a new `DistributionScanResults` based off the results of its files, the base
     /// inspector URL for this distribution, and the commit hash used to scan.
-    pub fn new(
-        file_scan_results: Vec<FileScanResult>,
-        inspector_url: Url,
-    ) -> Self {
+    pub fn new(file_scan_results: Vec<FileScanResult>, inspector_url: Url) -> Self {
         Self {
             file_scan_results,
             inspector_url,
@@ -222,7 +216,6 @@ impl PackageScanResults {
         }
     }
 }
-
 
 /// Scan all the distributions of the given job against the given ruleset
 ///

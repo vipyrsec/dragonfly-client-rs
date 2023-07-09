@@ -3,9 +3,9 @@ mod api_models;
 mod app_config;
 mod common;
 mod error;
+mod exts;
 mod scanner;
 mod utils;
-mod exts;
 
 use std::{
     collections::VecDeque,
@@ -87,7 +87,7 @@ fn main() -> Result<(), DragonflyError> {
                     info!("Finished loading jobs into queue!");
                 }
 
-                Err(err) => error!("Unexpected HTTP error: {err}")
+                Err(err) => error!("Unexpected HTTP error: {err}"),
             }
 
             std::thread::sleep(Duration::from_secs(APP_CONFIG.load_duration));
