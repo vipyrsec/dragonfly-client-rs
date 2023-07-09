@@ -15,7 +15,7 @@ use std::{
 use api::DragonflyClient;
 use api_models::Job;
 use error::DragonflyError;
-use reqwest::{blocking::Client, StatusCode};
+use reqwest::blocking::Client;
 use threadpool::ThreadPool;
 use tracing::{error, info, span, Level};
 use yara::Rules;
@@ -62,14 +62,34 @@ fn main() -> Result<(), DragonflyError> {
         let queue = Arc::clone(&queue);
         info!("Starting loader thread");
         move || loop {
-            info!("Fetching bulk jobs...");
-            for job in client.bulk_get_job(n_jobs) {
-                info!("Pushing {} v{} onto scan queue", job.name, job.version);
-                let mut queue = queue.lock().unwrap();
-                queue.push_back(job);
+            info!("Fetching {} bulk jobs...", APP_CONFIG.bulk_size);
+            match client.bulk_get_job(APP_CONFIG.bulk_size) {
+                Ok(jobs) => {
+                    info!("Waiting for mutex lock on queue to push jobs");
+                    let mut queue = queue.lock().unwrap();
+
+                    if jobs.is_empty() {
+                        info!("Bulk job request returned no jobs");
+                    }
+
+                    for job in jobs {
+                        info!("Pushing {} v{} onto queue", job.name, job.version);
+                        if job.hash != client.state.read().unwrap().hash {
+                            info!("Detected job hash mismatch, attempting to sync rules");
+                            if let Err(err) = client.update_rules() {
+                                error!("Error while updating rules: {err}");
+                            }
+                        }
+                        queue.push_back(job);
+                    }
+
+                    info!("Finished loading jobs into queue!");
+                }
+
+                Err(err) => error!("Unexpected HTTP error: {err}")
             }
-            info!("Finished loading jobs into queue!");
-            std::thread::sleep(Duration::from_secs(APP_CONFIG.wait_duration));
+
+            std::thread::sleep(Duration::from_secs(APP_CONFIG.load_duration));
         }
     });
 
@@ -128,28 +148,12 @@ fn main() -> Result<(), DragonflyError> {
                     version = success_body.version
                 );
                 let _enter = span.enter();
+
                 info!("Received success body, sending upstream...");
-                match client.send_success(&success_body) {
-                    Err(DragonflyError::HTTPError { source: http_err })
-                        if http_err.status() == Some(StatusCode::UNAUTHORIZED) =>
-                    {
-                        info!("Got 401 UNAUTHORIZED while sending success");
-                        info!("Waiting on write lock to update access token");
-                        let mut state = client.state.write().unwrap();
-                        info!("Successfully obtained write lock!");
-                        info!("Requesting new access token...");
-                        let new_access_token = client.reauthenticate();
-                        info!("Successfuly got new access token!");
-                        state.access_token = new_access_token;
-                        info!("Successfully updated local access token to new one!");
-                        info!("Sending success body again...");
-                        client.send_success(&success_body)?;
-                        info!("Successfully sent success body again!");
-                    }
-
-                    Ok(()) => info!("Successfully sent success"),
-
-                    Err(err) => error!("Unexpected error while sending success: {err}"),
+                if let Err(err) = client.send_success(&success_body) {
+                    error!("Unexpected error while sending success: {err}");
+                } else {
+                    info!("Successfully sent success!");
                 }
             }
 
@@ -161,28 +165,12 @@ fn main() -> Result<(), DragonflyError> {
                     version = error_body.version
                 );
                 let _enter = span.enter();
+
                 info!("Received error body, sending upstream...");
-                match client.send_error(&error_body) {
-                    Err(DragonflyError::HTTPError { source: http_err })
-                        if http_err.status() == Some(StatusCode::UNAUTHORIZED) =>
-                    {
-                        info!("Got 401 UNAUTHORIZED while sending success");
-                        info!("Waiting on write lock to update access token");
-                        let mut state = client.state.write().unwrap();
-                        info!("Successfully obtained write lock!");
-                        info!("Requesting new access token...");
-                        let new_access_token = client.reauthenticate();
-                        info!("Successfuly got new access token!");
-                        state.access_token = new_access_token;
-                        info!("Successfully updated local access token to new one!");
-                        info!("Sending success body again...");
-                        client.send_error(&error_body)?;
-                        info!("Successfully sent success body again!");
-                    }
-
-                    Ok(()) => info!("Successfully sent error"),
-
-                    Err(err) => error!("Unexpected error while sending error: {err}"),
+                if let Err(err) = client.send_error(&error_body) {
+                    error!("Unexpected error while sending error: {err}");
+                } else {
+                    info!("Successfully sent error!");
                 }
             }
 

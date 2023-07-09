@@ -9,6 +9,8 @@ pub struct AppConfig {
     pub base_url: String,
     pub threads: usize,
     pub wait_duration: u64,
+    pub load_duration: u64,
+    pub bulk_size: usize,
     pub auth0_domain: String,
     pub client_id: String,
     pub client_secret: String,
@@ -21,6 +23,8 @@ pub struct AppConfig {
 
 impl Default for AppConfig {
     fn default() -> Self {
+        let threads = std::thread::available_parallelism().map(usize::from).unwrap_or(1);
+
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         AppConfig {
             base_url: String::from("https://dragonfly.vipyrsec.com"),
@@ -31,10 +35,10 @@ impl Default for AppConfig {
             client_secret: String::new(),
             username: String::new(),
             password: String::new(),
-            threads: std::thread::available_parallelism()
-                .map(usize::from)
-                .unwrap_or(1),
-            wait_duration: 60u64,
+            threads,
+            bulk_size: threads,
+            load_duration: 10,
+            wait_duration: 10,
             max_scan_size: 1.28e+8 as u64, // 128 MB
         }
     }

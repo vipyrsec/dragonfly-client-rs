@@ -4,7 +4,7 @@ use crate::{
     APP_CONFIG,
 };
 use flate2::read::GzDecoder;
-use reqwest::{blocking::Client, Url};
+use reqwest::{blocking::Client, Url, StatusCode};
 use std::{
     io::{Cursor, Read},
     sync::RwLock,
@@ -13,7 +13,7 @@ use std::{
 use tracing::{error, info, warn};
 
 use crate::{
-    api_models::{AuthBody, AuthResponse, GetJobResponse, GetRulesResponse, Job},
+    api_models::{AuthBody, AuthResponse, GetRulesResponse, Job},
     error::DragonflyError,
 };
 
@@ -59,10 +59,11 @@ fn fetch_access_token(http_client: &Client) -> reqwest::Result<AuthResponse> {
         .json()
 }
 
-fn fetch_job(http_client: &Client, access_token: &str) -> reqwest::Result<GetJobResponse> {
+fn fetch_bulk_job(http_client: &Client, access_token: &str, n_jobs: usize) -> reqwest::Result<Vec<Job>> {
     http_client
-        .post(format!("{}/job", APP_CONFIG.base_url))
+        .post(format!("{}/jobs", APP_CONFIG.base_url))
         .header("Authorization", format!("Bearer {access_token}"))
+        .query(&[("batch", n_jobs)])
         .send()?
         .error_for_status()?
         .json()
@@ -171,45 +172,74 @@ impl DragonflyClient {
         Ok(())
     }
 
-    /// Fetch a job. None if the server has nothing for us to do.
-    pub fn get_job(&self) -> Result<Option<Job>, DragonflyError> {
+    pub fn bulk_get_job(&self, n_jobs: usize) -> reqwest::Result<Vec<Job>> {
         let state = self.state.read().unwrap();
-        match fetch_job(self.get_http_client(), &state.access_token) {
-            Ok(GetJobResponse::Job(job)) => Ok(Some(job)),
-            Ok(GetJobResponse::Error { .. }) => Ok(None),
-            Err(err) => Err(err.into()),
-        }
-    }
+        match fetch_bulk_job(self.get_http_client(), &state.access_token, n_jobs) {
+            Err(err) if err.status() == Some(StatusCode::UNAUTHORIZED) => {
+                drop(state); // Drop the read lock
+                info!("Got 401 UNAUTHORIZED while doing a bulk fetch job request");
+                info!("Waiting on write lock to update access token");
+                let mut state = self.state.write().unwrap();
+                info!("Successfully obtained write lock!");
+                info!("Requesting new access token...");
+                let new_access_token = self.reauthenticate();
+                info!("Successfuly got new access token!");
+                state.access_token = new_access_token;
+                info!("Successfully updated local access token to new one!");
+                info!("Doing a bulk fetch job again...");
+                fetch_bulk_job(self.get_http_client(), &state.access_token, n_jobs)
 
-    pub fn bulk_get_job(&self, num_jobs: usize) -> Vec<Job> {
-        let state = self.state.read().unwrap();
-        let mut jobs = Vec::new();
-        for _ in 0..num_jobs {
-            match fetch_job(self.get_http_client(), &state.access_token) {
-                Ok(GetJobResponse::Job(job)) => jobs.push(job),
-                Ok(GetJobResponse::Error { .. }) => {}
-                Err(err) => error!("Unexpected error while bulk fetching job: {err}"),
             }
-        }
 
-        jobs
+            other => other
+        }
     }
 
     /// Report an error to the server.
-    pub fn send_error(&self, body: &SubmitJobResultsError) -> Result<(), DragonflyError> {
+    pub fn send_error(&self, body: &SubmitJobResultsError) -> reqwest::Result<()> {
         let state = self.state.read().unwrap();
-        send_error(self.get_http_client(), &state.access_token, body)?;
+        match send_error(self.get_http_client(), &state.access_token, body)  {
+            Err(http_err) if http_err.status() == Some(StatusCode::UNAUTHORIZED) => {
+                drop(state); // Drop the read lock
+                info!("Got 401 UNAUTHORIZED while sending success");
+                info!("Waiting on write lock to update access token");
+                let mut state = self.state.write().unwrap();
+                info!("Successfully obtained write lock!");
+                info!("Requesting new access token...");
+                let new_access_token = self.reauthenticate();
+                info!("Successfuly got new access token!");
+                state.access_token = new_access_token;
+                info!("Successfully updated local access token to new one!");
+                info!("Sending success body again...");
+                send_error(self.get_http_client(), &state.access_token, &body)
+            }
 
-        Ok(())
+            other => other
+        }
     }
 
     /// Submit the results of a scan to the server, given the job and the scan results of each
     /// distribution
-    pub fn send_success(&self, body: &SubmitJobResultsSuccess) -> Result<(), DragonflyError> {
+    pub fn send_success(&self, body: &SubmitJobResultsSuccess) -> reqwest::Result<()> {
         let state = self.state.read().unwrap();
-        send_success(self.get_http_client(), &state.access_token, &body)?;
+        match send_success(self.get_http_client(), &state.access_token, &body) {
+            Err(http_err) if http_err.status() == Some(StatusCode::UNAUTHORIZED) => {
+                drop(state); // Drop the read lock
+                info!("Got 401 UNAUTHORIZED while sending success");
+                info!("Waiting on write lock to update access token");
+                let mut state = self.state.write().unwrap();
+                info!("Successfully obtained write lock!");
+                info!("Requesting new access token...");
+                let new_access_token = self.reauthenticate();
+                info!("Successfuly got new access token!");
+                state.access_token = new_access_token;
+                info!("Successfully updated local access token to new one!");
+                info!("Sending success body again");
+                send_success(self.get_http_client(), &state.access_token, &body)
+            }
 
-        Ok(())
+            other => other
+        }
     }
 
     /// Return a reference to the underlying HTTP Client

@@ -40,13 +40,6 @@ pub struct Job {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(untagged)]
-pub enum GetJobResponse {
-    Job(Job),
-    Error { detail: String },
-}
-
-#[derive(Debug, Deserialize)]
 pub struct GetRulesResponse {
     pub hash: String,
     pub rules: HashMap<String, String>,
