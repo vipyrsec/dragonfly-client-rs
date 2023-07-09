@@ -23,7 +23,7 @@ pub struct AppConfig {
 
 impl Default for AppConfig {
     fn default() -> Self {
-        let threads = std::thread::available_parallelism()
+        let available_paralellelism = std::thread::available_parallelism()
             .map(usize::from)
             .unwrap_or(1);
 
@@ -37,9 +37,9 @@ impl Default for AppConfig {
             client_secret: String::new(),
             username: String::new(),
             password: String::new(),
-            threads,
-            bulk_size: threads,
-            load_duration: 10,
+            threads: available_paralellelism,
+            bulk_size: 20,
+            load_duration: 60,
             wait_duration: 10,
             max_scan_size: 1.28e+8 as u64, // 128 MB
         }
