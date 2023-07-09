@@ -5,14 +5,14 @@ use std::{
 };
 
 use reqwest::{blocking::Client, Url};
-use yara::{MetadataValue, Rule, Rules};
+use yara::Rules;
 
 use crate::{
     api::{fetch_tarball, fetch_zipfile},
     api_models::{Job, SubmitJobResultsSuccess},
     common::{TarballType, ZipType},
     error::DragonflyError,
-    utils::create_inspector_url,
+    utils::create_inspector_url, exts::RuleExt,
 };
 
 #[derive(Debug, Hash, Eq, PartialEq)]
@@ -39,32 +39,6 @@ impl FileScanResult {
     }
 }
 
-/// Scan a file given it implements `Read`.
-///
-/// # Arguments
-/// * `path` - The path corresponding to this file
-/// * `rules` - The compiled rule set to scan this file against
-fn scan_file(
-    file: &mut impl Read,
-    path: &Path,
-    rules: &Rules,
-) -> Result<FileScanResult, DragonflyError> {
-    let mut buffer = Vec::new();
-    file.read_to_end(&mut buffer)?;
-
-    let rules: Vec<RuleScore> = rules
-        .scan_mem(&buffer, 10)?
-        .into_iter()
-        .filter(|rule| {
-            rule.get_filetypes()
-                .filter(|filetypes| filetypes.iter().any(|filetype| path.ends_with(filetype)))
-                .is_some()
-        })
-        .map(RuleScore::from)
-        .collect();
-
-    Ok(FileScanResult::new(path.to_path_buf(), rules))
-}
 
 /// Scan an archive format using Yara rules.
 trait Scan {
@@ -113,14 +87,12 @@ impl Distribution {
     fn scan(
         &mut self,
         rules: &Rules,
-        hash: &str,
     ) -> Result<DistributionScanResults, DragonflyError> {
         let results = self.file.scan(rules)?;
 
         Ok(DistributionScanResults::new(
             results,
             self.inspector_url.clone(),
-            hash.to_string(),
         ))
     }
 }
@@ -133,9 +105,6 @@ pub struct DistributionScanResults {
 
     /// The inspector URL pointing to this distribution's base
     inspector_url: Url,
-
-    /// The commit hash of the rules used to scan this distribution
-    commit_hash: String,
 }
 
 impl DistributionScanResults {
@@ -144,12 +113,10 @@ impl DistributionScanResults {
     pub fn new(
         file_scan_results: Vec<FileScanResult>,
         inspector_url: Url,
-        commit_hash: String,
     ) -> Self {
         Self {
             file_scan_results,
             inspector_url,
-            commit_hash,
         }
     }
 
@@ -190,8 +157,6 @@ impl DistributionScanResults {
 
     /// Return the inspector URL of the most malicious file, or `None` if there is no most malicious
     /// file
-    ///
-    ///
     pub fn inspector_url(&self) -> Option<String> {
         self.get_most_malicious_file().map(|file| {
             format!(
@@ -258,53 +223,6 @@ impl PackageScanResults {
     }
 }
 
-trait RuleExt<'a> {
-    /// Get the value of a metadata by key. `None` if that key/value pair doesn't exist
-    fn get_metadata_value(&'a self, key: &str) -> Option<&'a MetadataValue>;
-
-    /// Get the weight of this rule. `0` if no weight is defined.
-    fn get_rule_weight(&'a self) -> i64;
-
-    /// Get a vector over the `filetype` metadata value. `None` if none are defined.
-    ///
-    /// If no filetypes are found, then this Rule should be applied to all filetypes. We use an
-    /// [`Option`] to indicate the 0 length case is treated differently.
-    fn get_filetypes(&'a self) -> Option<Vec<&'a str>>;
-}
-
-impl RuleExt<'_> for Rule<'_> {
-    fn get_metadata_value(&self, key: &str) -> Option<&'_ MetadataValue> {
-        self.metadatas
-            .iter()
-            .find(|metadata| metadata.identifier == key)
-            .map(|metadata| &metadata.value)
-    }
-
-    fn get_filetypes(&'_ self) -> Option<Vec<&'_ str>> {
-        if let Some(MetadataValue::String(string)) = self.get_metadata_value("filetype") {
-            Some(string.split(' ').collect())
-        } else {
-            None
-        }
-    }
-
-    fn get_rule_weight(&self) -> i64 {
-        if let Some(MetadataValue::Integer(integer)) = self.get_metadata_value("weight") {
-            *integer
-        } else {
-            0
-        }
-    }
-}
-
-impl From<Rule<'_>> for RuleScore {
-    fn from(rule: Rule) -> Self {
-        Self {
-            name: rule.identifier.to_owned(),
-            score: rule.get_rule_weight(),
-        }
-    }
-}
 
 /// Scan all the distributions of the given job against the given ruleset
 ///
@@ -312,7 +230,6 @@ impl From<Rule<'_>> for RuleScore {
 pub fn scan_all_distributions(
     http_client: &Client,
     rules: &Rules,
-    commit_hash: &str,
     job: &Job,
 ) -> Result<Vec<DistributionScanResults>, DragonflyError> {
     let mut distribution_scan_results = Vec::with_capacity(job.distributions.len());
@@ -328,9 +245,36 @@ pub fn scan_all_distributions(
             },
             inspector_url,
         };
-        let distribution_scan_result = dist.scan(rules, commit_hash)?;
+        let distribution_scan_result = dist.scan(rules)?;
         distribution_scan_results.push(distribution_scan_result);
     }
 
     Ok(distribution_scan_results)
+}
+
+/// Scan a file given it implements `Read`.
+///
+/// # Arguments
+/// * `path` - The path corresponding to this file
+/// * `rules` - The compiled rule set to scan this file against
+fn scan_file(
+    file: &mut impl Read,
+    path: &Path,
+    rules: &Rules,
+) -> Result<FileScanResult, DragonflyError> {
+    let mut buffer = Vec::new();
+    file.read_to_end(&mut buffer)?;
+
+    let rules: Vec<RuleScore> = rules
+        .scan_mem(&buffer, 10)?
+        .into_iter()
+        .filter(|rule| {
+            rule.get_filetypes()
+                .filter(|filetypes| filetypes.iter().any(|filetype| path.ends_with(filetype)))
+                .is_some()
+        })
+        .map(RuleScore::from)
+        .collect();
+
+    Ok(FileScanResult::new(path.to_path_buf(), rules))
 }

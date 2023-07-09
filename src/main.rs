@@ -5,6 +5,7 @@ mod common;
 mod error;
 mod scanner;
 mod utils;
+mod exts;
 
 use std::{
     collections::VecDeque,
@@ -34,7 +35,7 @@ fn runner(
     rules: &Rules,
     commit_hash: &str,
 ) -> Result<PackageScanResults, DragonflyError> {
-    let distribution_scan_results = scan_all_distributions(http_client, rules, commit_hash, job)?;
+    let distribution_scan_results = scan_all_distributions(http_client, rules, job)?;
 
     let package_scan_result = PackageScanResults::new(
         job.name.to_string(),
