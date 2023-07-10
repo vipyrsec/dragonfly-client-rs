@@ -1,29 +1,95 @@
-FROM rust:1.69-bullseye as builder
+#syntax=docker/dockerfile:1.5
 
-RUN USER=root cargo new --bin dragonfly-rs
-WORKDIR /dragonfly-rs
+ARG DEBIAN_VERSION=bullseye
+ARG DEBIAN_VERSION_NUMBER=11
+ARG PROJECT=dragonfly-client-rs
+ARG RUST_VERSION=1.70
+ARG RUSTFLAGS="-L/usr/local/lib"
 
-RUN apt update && apt install -y curl libclang-dev
+ARG YARA_VERSION=4.3.1
 
-RUN curl -sL https://github.com/VirusTotal/yara/archive/refs/tags/v4.3.1.tar.gz | tar xz && cd yara-4.3.1 && ./bootstrap.sh && ./configure && make && make install
+# ====================================================================================================
+# Base
+FROM rust:${RUST_VERSION}-${DEBIAN_VERSION} AS build-base
+ARG PROJECT
 
-COPY .cargo/ .cargo/
-COPY Cargo.toml .
-COPY Cargo.lock .
+ARG RUSTFLAGS
+ARG YARA_VERSION
 
-ARG dragonfly_base_url=dragonfly.vipyrsec.com
-ENV DRAGONFLY_BASE_URL=$dragonfly_base_url
+RUN <<EOT
+#!/usr/bin/env bash
+set -e
 
-RUN RUSTFLAGS='-L/usr/local/lib' cargo build --release
+apt-get -q update
+apt-get -qy --no-install-recommends install curl libclang-dev
+rm -rf /var/lib/apt/lists/*
+EOT
 
-RUN rm target/release/deps/dragonfly_rs*
+RUN <<EOT
+#!/usr/bin/env bash
+set -euo pipefail
 
-COPY src/ src/
-RUN RUSTFLAGS='-L/usr/local/lib' cargo build --release
+archive_filename="yara-${YARA_VERSION}.tar.gz"
+curl -sL "https://github.com/VirusTotal/yara/archive/refs/tags/v${YARA_VERSION}.tar.gz" -o "${archive_filename}"
+tar -xzf "${archive_filename}" && cd "yara-${YARA_VERSION}" && ./bootstrap.sh && ./configure && make && make install
+EOT
 
-###################################################################
-FROM gcr.io/distroless/cc as runner
+WORKDIR /app
+COPY .cargo Cargo.toml ./
+COPY Cargo.lock Cargo.lock
 
-COPY --from=builder /dragonfly-rs/target/release/dragonfly-rs ./
+# ====================================================================================================
+# Debug
+FROM build-base AS build-debug
+ARG PROJECT
 
-CMD ["./dragonfly-rs"]
+RUN <<EOT
+#!/usr/bin/env bash
+set -eu
+
+mkdir src
+echo 'fn main() {}' > src/main.rs
+cargo build --locked
+rm src/main.rs target/debug/deps/${PROJECT//-/_}*
+EOT
+
+COPY src src
+RUN cargo build --frozen
+
+# ==================================================
+FROM gcr.io/distroless/cc-debian${DEBIAN_VERSION_NUMBER}:debug-nonroot AS debug
+ARG PROJECT
+
+WORKDIR /app
+
+COPY --from=build-debug /app/target/debug/${PROJECT} ./${PROJECT}
+
+ENTRYPOINT ["./dragonfly-client-rs"]
+
+# ====================================================================================================
+# Release
+FROM build-base AS build-release
+ARG PROJECT
+
+RUN <<EOT
+#!/usr/bin/env bash
+set -eu
+
+mkdir src
+echo 'fn main() {}' > src/main.rs
+cargo build --locked --release
+rm src/main.rs target/release/deps/${PROJECT//-/_}*
+EOT
+
+COPY src src
+RUN cargo build --frozen --release
+
+# ==================================================
+FROM gcr.io/distroless/cc-debian${DEBIAN_VERSION_NUMBER}:nonroot AS release
+ARG PROJECT
+
+WORKDIR /app
+
+COPY --from=build-release /app/target/release/${PROJECT} ./${PROJECT}
+
+ENTRYPOINT ["./dragonfly-client-rs"]

@@ -1,0 +1,10 @@
+services:
+  dragonfly-client-rs:
+    build:
+      context: .
+      # target: debug
+    container_name: dragonfly-client-rs
+    # image: vipyrsec/dragonfly-client:latest-debug
+    image: vipyrsec/dragonfly-client-rs:latest
+    volumes:
+      - ./Config.toml:/app/Config.toml

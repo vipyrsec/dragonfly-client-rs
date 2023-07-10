@@ -1,57 +1,66 @@
-# dragonfly-rs
+# dragonfly-client-rs
 
-Modular compute nodes capable of scanning packages and sending results upstream to a control server, written in Rust
+Modular compute nodes capable of scanning packages and sending results upstream to a control server, written in Rust.
 
 ## Set up
+
 This section goes over how to set up a client instance locally and via Docker.
 
-**Please refer to the "Environment variables" section towards the bottom of this page for information on what environment variables are necessary**
+> Refer to the [Environment variables](#environment-variables) section for information on what environment variables are necessary.
 
 ### Local
 
-Requirements
-- [Rust](https://www.rust-lang.org/learn/get-started)
-- [yara](https://yara.readthedocs.io/en/stable/gettingstarted.html#compiling-and-installing-yara)
-- [git](https://git-scm.com/book/en/v2/Getting-Started-Installing-Git)
+#### Requirements
 
+- [Rust](https://www.rust-lang.org/tools/install)
+- [YARA](https://yara.readthedocs.io/en/stable/gettingstarted.html#compiling-and-installing-yara)
 
-Set the appropriate environment variable pointing to the yara installation:
-```
-export RUSTFLAGS='-L/path/to/yara'
+#### 1. Set the appropriate environment variable pointing to the YARA installation
+```sh
+export YARA_LIBRARY_PATH='/path/to/yara/libs'
 ```
 
-Clone the repository and change directory into it:
-```
-git clone https://github.com/vipyrsec/dragonfly-rs.git
-cd dragonfly-rs
-```
-Build the binary with cargo:
-```
+#### 2. Build the binary with `cargo`
+
+```sh
 cargo build --release
 ```
-Finally, run the built binary:
-```
-./target/release/dragonfly-rs
+
+#### 3. Run the built binary
+
+```sh
+./target/release/dragonfly-client-rs
 ```
 
 ### Docker
 
-Requirements:
-- [Docker Engine](https://docs.docker.com/get-docker/)
-- [git](https://git-scm.com/book/en/v2/Getting-Started-Installing-Git)
+#### Requirements
 
-Clone the repository and change directory into it:
+- [Docker Engine](https://docs.docker.com/engine/install/)
+
+#### 1. Build and tag the image
+
+```sh
+docker build --tag vipyrsec/dragonfly-client-rs:latest .
 ```
-git clone https://github.com/vipyrsec/dragonfly-rs.git
-cd dragonfly-rs
+
+#### 2. Run the container
+
+```sh
+docker run --name dragonfly-client-rs vipyrsec/dragonfly-client-rs:latest
 ```
-Build the Docker image and tag it:
+
+### Docker Compose
+
+#### Requirements
+
+- [Docker Engine](https://docs.docker.com/engine/install/)
+- [Docker Compose](https://docs.docker.com/compose/install/)
+
+#### Run the service
+
 ```
-docker build --tag dragonfly-rs .
-```
-Run the Docker image:
-```
-docker run dragonfly-rs
+docker compose up
 ```
 
 ### How it works: Overview
@@ -123,6 +132,7 @@ configurable by the `DRAGONFLY_WAIT_DURATION` environment variable, then try aga
 
 
 ### Environment variables
+
 Below are a list of environment variables that need to be configured, and what they do
 
 | Variable                  | Default                          | Description                               |
