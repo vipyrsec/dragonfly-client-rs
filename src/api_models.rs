@@ -1,6 +1,7 @@
 use serde::Serialize;
 use serde::{self, Deserialize};
 use std::collections::HashMap;
+use std::fmt::Display;
 use yara::{Compiler, Rules};
 
 use crate::error::DragonflyError;
@@ -19,11 +20,34 @@ pub struct SubmitJobResultsSuccess {
     pub commit: String,
 }
 
+impl Display for SubmitJobResultsSuccess {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Name: {}\n", self.name)?;
+        write!(f, "Version: {}\n", self.version)?;
+        write!(f, "Score: {}\n", self.score)?;
+        write!(f, "Inspector URL: {}\n", &self.inspector_url.as_deref().unwrap_or("None"))?;
+        write!(f, "Rules matched: {}\n", self.rules_matched.join(", "))?;
+        write!(f, "Commit hash: {}\n", self.commit)?;
+
+        Ok(())
+    } 
+}
+
 #[derive(Debug, Serialize)]
 pub struct SubmitJobResultsError {
     pub name: String,
     pub version: String,
     pub reason: String,
+}
+
+impl Display for SubmitJobResultsError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Name: {}\n", self.name)?;
+        write!(f, "Version: {}\n", self.version)?;
+        write!(f, "Reason: {}\n", self.reason)?;
+
+        Ok(())
+    } 
 }
 
 pub enum SubmitJobResultsBody {
