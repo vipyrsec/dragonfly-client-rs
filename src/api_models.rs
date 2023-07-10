@@ -22,15 +22,19 @@ pub struct SubmitJobResultsSuccess {
 
 impl Display for SubmitJobResultsSuccess {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Name: {}\n", self.name)?;
-        write!(f, "Version: {}\n", self.version)?;
-        write!(f, "Score: {}\n", self.score)?;
-        write!(f, "Inspector URL: {}\n", &self.inspector_url.as_deref().unwrap_or("None"))?;
-        write!(f, "Rules matched: {}\n", self.rules_matched.join(", "))?;
-        write!(f, "Commit hash: {}\n", self.commit)?;
+        writeln!(f, "Name: {}", self.name)?;
+        writeln!(f, "Version: {}", self.version)?;
+        writeln!(f, "Score: {}", self.score)?;
+        writeln!(
+            f,
+            "Inspector URL: {}",
+            &self.inspector_url.as_deref().unwrap_or("None")
+        )?;
+        writeln!(f, "Rules matched: {}", self.rules_matched.join(", "))?;
+        writeln!(f, "Commit hash: {}", self.commit)?;
 
         Ok(())
-    } 
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -42,12 +46,12 @@ pub struct SubmitJobResultsError {
 
 impl Display for SubmitJobResultsError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Name: {}\n", self.name)?;
-        write!(f, "Version: {}\n", self.version)?;
-        write!(f, "Reason: {}\n", self.reason)?;
+        writeln!(f, "Name: {}", self.name)?;
+        writeln!(f, "Version: {}", self.version)?;
+        writeln!(f, "Reason: {}", self.reason)?;
 
         Ok(())
-    } 
+    }
 }
 
 pub enum SubmitJobResultsBody {

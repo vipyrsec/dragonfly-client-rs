@@ -54,7 +54,7 @@ fn loader(client: &DragonflyClient, queue_lock: &Mutex<VecDeque<Job>>) {
             if jobs.is_empty() {
                 info!("Bulk job request returned no jobs");
             }
-            
+
             info!("Waiting for lock on queue to load jobs");
             let mut queue = queue_lock.lock().unwrap();
             for job in jobs {
