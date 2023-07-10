@@ -37,6 +37,7 @@ jobs:
       - name: Compile YARA
         if: steps.cache-yara.outputs.cache-hit != 'true' && runner.os == 'Linux'
         run: |
+          set -e
           curl -sL https://github.com/VirusTotal/yara/archive/refs/tags/v${{ inputs.version }}.tar.gz -o yara-${{ inputs.version }}.tar.gz
           tar -xzf yara-${{ inputs.version }}.tar.gz && cd yara-${{ inputs.version }} && ./bootstrap.sh && ./configure && make
 
