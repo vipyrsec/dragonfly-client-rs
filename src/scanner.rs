@@ -5,6 +5,7 @@ use std::{
 };
 
 use reqwest::{blocking::Client, Url};
+use tracing::warn;
 use yara::Rules;
 
 use crate::{
@@ -12,8 +13,7 @@ use crate::{
     api_models::{Job, SubmitJobResultsSuccess},
     common::{TarballType, ZipType},
     error::DragonflyError,
-    exts::RuleExt,
-    utils::create_inspector_url,
+    utils::create_inspector_url, exts::RuleExt,
 };
 
 #[derive(Debug, Hash, Eq, PartialEq)]
@@ -258,13 +258,12 @@ fn scan_file(
     let mut buffer = Vec::new();
     file.read_to_end(&mut buffer)?;
 
-    let rules: Vec<RuleScore> = rules
+    let rules = rules
         .scan_mem(&buffer, 10)?
         .into_iter()
         .filter(|rule| {
-            rule.get_filetypes()
-                .filter(|filetypes| filetypes.iter().any(|filetype| path.ends_with(filetype)))
-                .is_some()
+           let filetypes = rule.get_filetypes();
+           filetypes.is_empty() || filetypes.iter().any(|filetype| path.to_string_lossy().ends_with(filetype)) 
         })
         .map(RuleScore::from)
         .collect();
