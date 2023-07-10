@@ -9,11 +9,8 @@ pub trait RuleExt<'a> {
     /// Get the weight of this rule. `0` if no weight is defined.
     fn get_rule_weight(&'a self) -> i64;
 
-    /// Get a vector over the `filetype` metadata value. `None` if none are defined.
-    ///
-    /// If no filetypes are found, then this Rule should be applied to all filetypes. We use an
-    /// [`Option`] to indicate the 0 length case is treated differently.
-    fn get_filetypes(&'a self) -> Option<Vec<&'a str>>;
+    /// Get a vector over the `filetype` metadata value. An empty Vec if not defined.
+    fn get_filetypes(&'a self) -> Vec<&'a str>;
 }
 
 impl RuleExt<'_> for Rule<'_> {
@@ -24,11 +21,11 @@ impl RuleExt<'_> for Rule<'_> {
             .map(|metadata| &metadata.value)
     }
 
-    fn get_filetypes(&'_ self) -> Option<Vec<&'_ str>> {
+    fn get_filetypes(&'_ self) -> Vec<&'_ str> {
         if let Some(MetadataValue::String(string)) = self.get_metadata_value("filetype") {
-            Some(string.split(' ').collect())
+            string.split(' ').collect()
         } else {
-            None
+            Vec::new()
         }
     }
 
