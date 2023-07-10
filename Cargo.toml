@@ -10,7 +10,7 @@ figment = { version = "0.10.10", features = ["env", "toml"] }
 flate2 = "1.0.26"
 log = "0.4.17"
 reqwest = { version = "0.11.18", features = ["blocking", "json", "serde_json", "gzip"] }
-serde = { version = "1.0.163", features = ["derive"] }
+serde = { version = "1.0.171", features = ["derive"] }
 tar = "0.4.38"
 thiserror = "1.0.40"
 threadpool = "1.8.1"
