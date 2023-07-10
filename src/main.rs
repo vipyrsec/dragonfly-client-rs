@@ -47,14 +47,16 @@ fn scanner(
     Ok(package_scan_result)
 }
 
-fn loader(client: &DragonflyClient, queue: &mut VecDeque<Job>) {
+fn loader(client: &DragonflyClient, queue_lock: &Mutex<VecDeque<Job>>) {
     info!("Fetching {} bulk jobs...", APP_CONFIG.bulk_size);
     match client.bulk_get_job(APP_CONFIG.bulk_size) {
         Ok(jobs) => {
             if jobs.is_empty() {
                 info!("Bulk job request returned no jobs");
             }
-
+            
+            info!("Waiting for lock on queue to load jobs");
+            let mut queue = queue_lock.lock().unwrap();
             for job in jobs {
                 info!("Pushing {} v{} onto queue", job.name, job.version);
                 if job.hash != client.state.read().unwrap().hash {
@@ -91,7 +93,7 @@ fn main() -> Result<(), DragonflyError> {
         let queue = Arc::clone(&queue);
         info!("Starting loader thread");
         move || loop {
-            loader(&client, &mut queue.lock().unwrap());
+            loader(&client, &queue);
             std::thread::sleep(Duration::from_secs(APP_CONFIG.load_duration));
         }
     });
@@ -153,6 +155,7 @@ fn main() -> Result<(), DragonflyError> {
                 let _enter = span.enter();
 
                 info!("Received success body, sending upstream...");
+                info!("Success body: {success_body}");
                 if let Err(err) = client.send_success(&success_body) {
                     error!("Unexpected error while sending success: {err}");
                 } else {
@@ -170,6 +173,7 @@ fn main() -> Result<(), DragonflyError> {
                 let _enter = span.enter();
 
                 info!("Received error body, sending upstream...");
+                info!("Error body: {error_body}");
                 if let Err(err) = client.send_error(&error_body) {
                     error!("Unexpected error while sending error: {err}");
                 } else {
