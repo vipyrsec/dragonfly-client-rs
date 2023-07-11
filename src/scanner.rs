@@ -204,7 +204,9 @@ impl PackageScanResults {
             .iter()
             .flat_map(DistributionScanResults::get_matched_rule_identifiers)
             .map(std::string::ToString::to_string)
-            .collect::<Vec<String>>();
+            .collect::<HashSet<String>>()
+            .into_iter()
+            .collect();
 
         SubmitJobResultsSuccess {
             name: self.name.clone(),
