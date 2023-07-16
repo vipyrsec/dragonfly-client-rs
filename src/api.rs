@@ -213,7 +213,7 @@ impl DragonflyClient {
                 info!("Successfuly got new access token!");
                 state.access_token = new_access_token;
                 info!("Successfully updated local access token to new one!");
-                info!("Sending success body again...");
+                info!("Sending error body again...");
                 send_error(self.get_http_client(), &state.access_token, body)
             }
 
