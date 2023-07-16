@@ -10,7 +10,7 @@ use std::{
     sync::RwLock,
     time::Duration,
 };
-use tracing::{error, info, warn, trace};
+use tracing::{error, info, trace, warn};
 
 use crate::{
     api_models::{AuthBody, AuthResponse, GetRulesResponse, Job},

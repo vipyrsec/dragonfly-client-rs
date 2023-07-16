@@ -20,7 +20,7 @@ use api_models::Job;
 use error::DragonflyError;
 use reqwest::blocking::Client;
 use threadpool::ThreadPool;
-use tracing::{error, info, span, Level, trace, debug};
+use tracing::{debug, error, info, span, trace, Level};
 use yara::Rules;
 
 use crate::{
@@ -142,7 +142,10 @@ fn main() -> Result<(), DragonflyError> {
                     info!("Submitting {} v{} for execution", job.name, job.version);
                     let state = client.state.read().unwrap();
                     if job.hash != client.state.read().unwrap().hash {
-                        info!("Must update rules, updating from {} to {}", state.hash, job.hash);
+                        info!(
+                            "Must update rules, updating from {} to {}",
+                            state.hash, job.hash
+                        );
                         drop(state);
                         if let Err(err) = client.update_rules() {
                             error!("Error while updating rules: {err}");
