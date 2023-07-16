@@ -98,8 +98,8 @@ fn main() -> Result<(), DragonflyError> {
                     );
                     let _enter = span.enter();
 
-                    info!("Received success body, sending upstream...");
-                    info!("Success body: {success_body}");
+                    trace!("Received success body, sending upstream...");
+                    trace!("Success body: {success_body}");
                     if let Err(err) = client.send_success(&success_body) {
                         error!("Unexpected error while sending success: {err}");
                     } else {
@@ -116,8 +116,8 @@ fn main() -> Result<(), DragonflyError> {
                     );
                     let _enter = span.enter();
 
-                    info!("Received error body, sending upstream...");
-                    info!("Error body: {error_body}");
+                    trace!("Received error body, sending upstream...");
+                    trace!("Error body: {error_body}");
                     if let Err(err) = client.send_error(&error_body) {
                         error!("Unexpected error while sending error: {err}");
                     } else {
