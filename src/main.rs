@@ -20,7 +20,7 @@ use api_models::Job;
 use error::DragonflyError;
 use reqwest::blocking::Client;
 use threadpool::ThreadPool;
-use tracing::{error, info, span, Level};
+use tracing::{error, info, span, Level, trace, debug};
 use yara::Rules;
 
 use crate::{
@@ -81,11 +81,12 @@ fn main() -> Result<(), DragonflyError> {
     // results. The main thread will handle requesting the jobs and submitting them to the threadpool.
     let n_jobs = APP_CONFIG.threads;
     let pool = ThreadPool::new(n_jobs);
-    info!("Started threadpool with {} workers", n_jobs);
+    debug!("Started threadpool with {} workers", n_jobs);
 
     // Spawning the "sender" thread
     std::thread::spawn({
         let client = Arc::clone(&client);
+        trace!("Starting loader thread");
         move || loop {
             match rx.recv() {
                 Ok(SubmitJobResultsBody::Success(success_body)) => {
@@ -134,13 +135,14 @@ fn main() -> Result<(), DragonflyError> {
         match client.bulk_get_job(APP_CONFIG.bulk_size) {
             Ok(jobs) => {
                 if jobs.is_empty() {
-                    info!("Bulk job request returned no jobs");
+                    debug!("Bulk job request returned no jobs");
                 }
 
                 for job in jobs {
                     info!("Submitting {} v{} for execution", job.name, job.version);
+                    let state = client.state.read().unwrap();
                     if job.hash != client.state.read().unwrap().hash {
-                        info!("Detected job hash mismatch, attempting to sync rules");
+                        info!("Must update rules, updating from {} to {}", state.hash, job.hash);
                         if let Err(err) = client.update_rules() {
                             error!("Error while updating rules: {err}");
                         }
@@ -153,7 +155,7 @@ fn main() -> Result<(), DragonflyError> {
                     });
                 }
 
-                info!("Finished loading jobs into queue!");
+                trace!("Finished loading jobs into queue!");
             }
 
             Err(err) => error!("Unexpected HTTP error: {err}"),
