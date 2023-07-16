@@ -105,8 +105,8 @@ pub struct DistributionScanResults {
 }
 
 impl DistributionScanResults {
-    /// Create a new `DistributionScanResults` based off the results of its files, the base
-    /// inspector URL for this distribution, and the commit hash used to scan.
+    /// Create a new `DistributionScanResults` based off the results of its files and the base
+    /// inspector URL for this distribution.
     pub fn new(file_scan_results: Vec<FileScanResult>, inspector_url: Url) -> Self {
         Self {
             file_scan_results,
