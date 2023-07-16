@@ -23,7 +23,7 @@ pub struct AppConfig {
 
 impl Default for AppConfig {
     fn default() -> Self {
-        let available_paralellelism = std::thread::available_parallelism()
+        let available_parallelism= std::thread::available_parallelism()
             .map(usize::from)
             .unwrap_or(1);
 
@@ -37,7 +37,7 @@ impl Default for AppConfig {
             client_secret: String::new(),
             username: String::new(),
             password: String::new(),
-            threads: available_paralellelism,
+            threads: available_parallelism,
             bulk_size: 20,
             load_duration: 60,
             wait_duration: 10,
