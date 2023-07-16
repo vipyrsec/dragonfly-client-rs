@@ -8,8 +8,10 @@ mod scanner;
 mod utils;
 
 use std::{
-    collections::VecDeque,
-    sync::{mpsc, Arc, Mutex},
+    sync::{
+        mpsc::{self, SyncSender},
+        Arc,
+    },
     time::Duration,
 };
 
@@ -27,8 +29,10 @@ use crate::{
     scanner::{scan_all_distributions, PackageScanResults},
 };
 
-/// The actual scanning logic. Takes the job to be scanned, the compiled rules, the commit hash
-/// being used, and the HTTP client (for downloading distributions), and returns the `PackageScanResults`
+/// The actual scanning logic.
+///
+/// Takes the job to be scanned, the compiled rules, the commit hash being used, and the HTTP
+/// client (for downloading distributions), and returns the `PackageScanResults`.
 fn scanner(
     http_client: &Client,
     job: &Job,
@@ -47,141 +51,114 @@ fn scanner(
     Ok(package_scan_result)
 }
 
-fn loader(client: &DragonflyClient, queue_lock: &Mutex<VecDeque<Job>>) {
-    info!("Fetching {} bulk jobs...", APP_CONFIG.bulk_size);
-    match client.bulk_get_job(APP_CONFIG.bulk_size) {
-        Ok(jobs) => {
-            if jobs.is_empty() {
-                info!("Bulk job request returned no jobs");
-            }
+/// The job to run in the threadpool.
+fn runner(client: &DragonflyClient, job: Job, tx: &SyncSender<SubmitJobResultsBody>) {
+    let span = span!(Level::INFO, "Job", name = job.name, version = job.version);
+    let _enter = span.enter();
+    let state = client.state.read().unwrap();
+    let send_result = match scanner(client.get_http_client(), &job, &state.rules, &state.hash) {
+        Ok(package_scan_results) => tx.send(SubmitJobResultsBody::Success(
+            package_scan_results.build_body(),
+        )),
+        Err(err) => tx.send(SubmitJobResultsBody::Error(SubmitJobResultsError {
+            name: job.name,
+            version: job.version,
+            reason: format!("{err:#?}"),
+        })),
+    };
 
-            info!("Waiting for lock on queue to load jobs");
-            let mut queue = queue_lock.lock().unwrap();
-            for job in jobs {
-                info!("Pushing {} v{} onto queue", job.name, job.version);
-                if job.hash != client.state.read().unwrap().hash {
-                    info!("Detected job hash mismatch, attempting to sync rules");
-                    if let Err(err) = client.update_rules() {
-                        error!("Error while updating rules: {err}");
-                    }
-                }
-                queue.push_back(job);
-            }
-
-            info!("Finished loading jobs into queue!");
-        }
-
-        Err(err) => error!("Unexpected HTTP error: {err}"),
+    if send_result.is_err() {
+        error!("No more receivers listening across channel!");
     }
-
-    std::thread::sleep(Duration::from_secs(APP_CONFIG.load_duration));
 }
 
 fn main() -> Result<(), DragonflyError> {
     tracing_subscriber::fmt().init();
     let client = Arc::new(DragonflyClient::new()?);
     let (tx, rx) = mpsc::sync_channel(1024);
-    let queue: Arc<Mutex<VecDeque<Job>>> = Arc::new(Mutex::new(VecDeque::new()));
 
+    // We spawn `n_jobs` threads using a threadpool for processing jobs, +1 more thread to send the
+    // results. The main thread will handle requesting the jobs and submitting them to the threadpool.
     let n_jobs = APP_CONFIG.threads;
     let pool = ThreadPool::new(n_jobs);
     info!("Started threadpool with {} workers", n_jobs);
 
-    // This thread periodically loads jobs into the queue
+    // Spawning the "sender" thread
     std::thread::spawn({
         let client = Arc::clone(&client);
-        let queue = Arc::clone(&queue);
-        info!("Starting loader thread");
         move || loop {
-            loader(&client, &queue);
-            std::thread::sleep(Duration::from_secs(APP_CONFIG.load_duration));
+            match rx.recv() {
+                Ok(SubmitJobResultsBody::Success(success_body)) => {
+                    let span = span!(
+                        Level::INFO,
+                        "Job",
+                        name = success_body.name,
+                        version = success_body.version
+                    );
+                    let _enter = span.enter();
+
+                    info!("Received success body, sending upstream...");
+                    info!("Success body: {success_body}");
+                    if let Err(err) = client.send_success(&success_body) {
+                        error!("Unexpected error while sending success: {err}");
+                    } else {
+                        info!("Successfully sent success!");
+                    }
+                }
+
+                Ok(SubmitJobResultsBody::Error(error_body)) => {
+                    let span = span!(
+                        Level::INFO,
+                        "Job",
+                        name = error_body.name,
+                        version = error_body.version
+                    );
+                    let _enter = span.enter();
+
+                    info!("Received error body, sending upstream...");
+                    info!("Error body: {error_body}");
+                    if let Err(err) = client.send_error(&error_body) {
+                        error!("Unexpected error while sending error: {err}");
+                    } else {
+                        info!("Successfully sent error!");
+                    }
+                }
+
+                Err(_) => error!("No more transmitters!"),
+            }
         }
     });
 
-    // These threads do the actual scanning and send results over a channel
-    for _ in 0..n_jobs {
-        let client = Arc::clone(&client);
-        let queue = Arc::clone(&queue);
-        let tx = tx.clone();
-        pool.execute(move || loop {
-            let state = client.state.read().unwrap();
-
-            info!("Attempting to get lock on queue");
-            match queue.lock().map(|mut q| q.pop_front()) {
-                Ok(Some(job)) => {
-                    let span = span!(Level::INFO, "Job", name = job.name, version = job.version);
-                    let _enter = span.enter();
-                    info!("Successfuly got job from queue!");
-                    let send_result =
-                        match scanner(client.get_http_client(), &job, &state.rules, &state.hash) {
-                            Ok(package_scan_results) => tx.send(SubmitJobResultsBody::Success(
-                                package_scan_results.build_body(),
-                            )),
-                            Err(err) => {
-                                tx.send(SubmitJobResultsBody::Error(SubmitJobResultsError {
-                                    name: job.name,
-                                    version: job.version,
-                                    reason: format!("{err:#?}"),
-                                }))
-                            }
-                        };
-
-                    if send_result.is_err() {
-                        error!("No more receivers listening across channel!");
-                    }
-                }
-                Ok(None) => {
-                    let s = APP_CONFIG.wait_duration;
-                    let d = Duration::from_secs(s);
-                    info!("No jobs in queue! Trying again in {s} seconds...");
-                    std::thread::sleep(d);
-                }
-                Err(_) => error!("Queue lock is poisoned!"),
-            }
-        });
-    }
-
-    // This loop continuously recieves results from the mpsc channel and sends it upstream
     loop {
-        let client = Arc::clone(&client);
-        match rx.recv() {
-            Ok(SubmitJobResultsBody::Success(success_body)) => {
-                let span = span!(
-                    Level::INFO,
-                    "Job",
-                    name = success_body.name,
-                    version = success_body.version
-                );
-                let _enter = span.enter();
-
-                info!("Received success body, sending upstream...");
-                info!("Success body: {success_body}");
-                if let Err(err) = client.send_success(&success_body) {
-                    error!("Unexpected error while sending success: {err}");
-                } else {
-                    info!("Successfully sent success!");
+        info!("Fetching {} bulk jobs...", APP_CONFIG.bulk_size);
+        match client.bulk_get_job(APP_CONFIG.bulk_size) {
+            Ok(jobs) => {
+                if jobs.is_empty() {
+                    info!("Bulk job request returned no jobs");
                 }
+
+                for job in jobs {
+                    info!("Submitting {} v{} for execution", job.name, job.version);
+                    if job.hash != client.state.read().unwrap().hash {
+                        info!("Detected job hash mismatch, attempting to sync rules");
+                        if let Err(err) = client.update_rules() {
+                            error!("Error while updating rules: {err}");
+                        }
+                    }
+
+                    pool.execute({
+                        let client = Arc::clone(&client);
+                        let tx = tx.clone();
+                        move || runner(&client, job, &tx)
+                    });
+                }
+
+                info!("Finished loading jobs into queue!");
             }
 
-            Ok(SubmitJobResultsBody::Error(error_body)) => {
-                let span = span!(
-                    Level::INFO,
-                    "Job",
-                    name = error_body.name,
-                    version = error_body.version
-                );
-                let _enter = span.enter();
-
-                info!("Received error body, sending upstream...");
-                info!("Error body: {error_body}");
-                if let Err(err) = client.send_error(&error_body) {
-                    error!("Unexpected error while sending error: {err}");
-                } else {
-                    info!("Successfully sent error!");
-                }
-            }
-
-            Err(_) => error!("No more transmitters!"),
+            Err(err) => error!("Unexpected HTTP error: {err}"),
         }
+
+        std::thread::sleep(Duration::from_secs(APP_CONFIG.load_duration));
     }
 }
