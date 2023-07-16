@@ -143,6 +143,7 @@ fn main() -> Result<(), DragonflyError> {
                     let state = client.state.read().unwrap();
                     if job.hash != client.state.read().unwrap().hash {
                         info!("Must update rules, updating from {} to {}", state.hash, job.hash);
+                        drop(state);
                         if let Err(err) = client.update_rules() {
                             error!("Error while updating rules: {err}");
                         }
