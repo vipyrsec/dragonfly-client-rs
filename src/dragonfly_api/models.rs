@@ -51,12 +51,12 @@ pub struct Job {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct GetRulesResponse {
+pub struct RulesResponse {
     pub hash: String,
     pub rules: HashMap<String, String>,
 }
 
-impl GetRulesResponse {
+impl RulesResponse {
     /// Compile the rules from the response
     pub fn compile(&self) -> Result<Rules, DragonflyError> {
         let rules_str = self

@@ -35,7 +35,7 @@ pub fn fetch_bulk_job(
         .json()
 }
 
-pub fn fetch_rules(http_client: &Client, access_token: &str) -> reqwest::Result<models::GetRulesResponse> {
+pub fn fetch_rules(http_client: &Client, access_token: &str) -> reqwest::Result<models::RulesResponse> {
     http_client
         .get(format!("{}/rules", APP_CONFIG.base_url))
         .header("Authorization", format!("Bearer {access_token}"))
