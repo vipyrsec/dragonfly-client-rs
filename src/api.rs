@@ -89,7 +89,10 @@ impl DragonflyClient {
 
     /// Update the global ruleset. Waits for a write lock.
     pub fn update_rules(&self) -> Result<(), DragonflyError> {
-        let response = match fetch_rules(self.get_http_client(), &self.state.read().unwrap().access_token) {
+        let response = match fetch_rules(
+            self.get_http_client(),
+            &self.state.read().unwrap().access_token,
+        ) {
             Err(err) if err.status() == Some(StatusCode::UNAUTHORIZED) => {
                 info!("Got 401 UNAUTHORIZED while updating rules");
                 trace!("Waiting on write lock to update access token");
@@ -102,7 +105,7 @@ impl DragonflyClient {
                 info!("Successfully updated local access token to new one!");
                 info!("Fetching rules again...");
                 fetch_rules(self.get_http_client(), &state.access_token)
-            },
+            }
 
             Ok(response) => Ok(response),
 
@@ -114,7 +117,6 @@ impl DragonflyClient {
         state.hash = response.hash;
 
         Ok(())
-
     }
 
     pub fn bulk_get_job(&self, n_jobs: usize) -> reqwest::Result<Vec<Job>> {
