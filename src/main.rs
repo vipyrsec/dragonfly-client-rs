@@ -1,11 +1,11 @@
 mod api;
-mod api_models;
 mod app_config;
 mod common;
 mod error;
 mod exts;
 mod scanner;
 mod utils;
+mod dragonfly_api;
 
 use std::{
     sync::{
@@ -16,16 +16,19 @@ use std::{
 };
 
 use api::DragonflyClient;
-use api_models::Job;
 use error::DragonflyError;
 use reqwest::blocking::Client;
 use threadpool::ThreadPool;
-use tracing::{debug, error, info, span, trace, Level, warn};
+use tracing::{debug, error, info, span, trace, Level};
 use tracing_subscriber::EnvFilter;
 use yara::Rules;
 
 use crate::{
-    api_models::{SubmitJobResultsBody, SubmitJobResultsError},
+    dragonfly_api::{
+        Job,
+        SubmitJobResultsBody,
+        SubmitJobResultsError,
+    },
     common::APP_CONFIG,
     scanner::{scan_all_distributions, PackageScanResults},
 };

@@ -9,7 +9,7 @@ use yara::Rules;
 
 use crate::{
     api::{fetch_tarball, fetch_zipfile},
-    api_models::{Job, SubmitJobResultsSuccess},
+    dragonfly_api::{Job, SubmitJobResultsSuccess},
     common::{TarballType, ZipType},
     error::DragonflyError,
     exts::RuleExt,

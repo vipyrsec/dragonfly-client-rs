@@ -1,5 +1,15 @@
 use crate::{
-    api_models::{SubmitJobResultsError, SubmitJobResultsSuccess},
+    error::DragonflyError,
+    dragonfly_api::{
+        Job,
+        SubmitJobResultsSuccess,
+        SubmitJobResultsError,
+        send_success,
+        send_error,
+        fetch_access_token,
+        fetch_rules,
+        fetch_bulk_job,
+    },
     common::{TarballType, ZipType},
     APP_CONFIG,
 };
@@ -11,11 +21,6 @@ use std::{
     time::Duration,
 };
 use tracing::{error, info, trace, warn};
-
-use crate::{
-    api_models::{AuthBody, AuthResponse, GetRulesResponse, Job},
-    error::DragonflyError,
-};
 
 /// Application state
 pub struct State {
@@ -32,84 +37,6 @@ pub struct State {
 pub struct DragonflyClient {
     pub client: Client,
     pub state: RwLock<State>,
-}
-
-// The following are methods that are "low level" to the API
-// They simply send requests to the API and receive responses.
-// Their counterpart methods in the DragonflyClient struct
-// provide some abstractions on top of these methods such as
-// credential checking, revalidating, easier data access, etc...
-
-fn fetch_access_token(http_client: &Client) -> reqwest::Result<AuthResponse> {
-    let url = format!("https://{}/oauth/token", APP_CONFIG.auth0_domain);
-    let json_body = AuthBody {
-        client_id: &APP_CONFIG.client_id,
-        client_secret: &APP_CONFIG.client_secret,
-        audience: &APP_CONFIG.audience,
-        grant_type: &APP_CONFIG.grant_type,
-        username: &APP_CONFIG.username,
-        password: &APP_CONFIG.password,
-    };
-
-    http_client
-        .post(url)
-        .json(&json_body)
-        .send()?
-        .error_for_status()?
-        .json()
-}
-
-fn fetch_bulk_job(
-    http_client: &Client,
-    access_token: &str,
-    n_jobs: usize,
-) -> reqwest::Result<Vec<Job>> {
-    http_client
-        .post(format!("{}/jobs", APP_CONFIG.base_url))
-        .header("Authorization", format!("Bearer {access_token}"))
-        .query(&[("batch", n_jobs)])
-        .send()?
-        .error_for_status()?
-        .json()
-}
-
-fn fetch_rules(http_client: &Client, access_token: &str) -> reqwest::Result<GetRulesResponse> {
-    http_client
-        .get(format!("{}/rules", APP_CONFIG.base_url))
-        .header("Authorization", format!("Bearer {access_token}"))
-        .send()?
-        .error_for_status()?
-        .json()
-}
-
-fn send_success(
-    http_client: &Client,
-    access_token: &str,
-    body: &SubmitJobResultsSuccess,
-) -> reqwest::Result<()> {
-    http_client
-        .put(format!("{}/package", APP_CONFIG.base_url))
-        .header("Authorization", format!("Bearer {access_token}"))
-        .json(&body)
-        .send()?
-        .error_for_status()?;
-
-    Ok(())
-}
-
-fn send_error(
-    http_client: &Client,
-    access_token: &str,
-    body: &SubmitJobResultsError,
-) -> reqwest::Result<()> {
-    http_client
-        .put(format!("{}/package", APP_CONFIG.base_url))
-        .header("Authorization", format!("Bearer {access_token}"))
-        .json(&body)
-        .send()?
-        .error_for_status()?;
-
-    Ok(())
 }
 
 impl DragonflyClient {
