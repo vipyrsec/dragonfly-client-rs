@@ -20,7 +20,8 @@ use api_models::Job;
 use error::DragonflyError;
 use reqwest::blocking::Client;
 use threadpool::ThreadPool;
-use tracing::{debug, error, info, span, trace, Level};
+use tracing::{debug, error, info, span, trace, Level, warn};
+use tracing_subscriber::EnvFilter;
 use yara::Rules;
 
 use crate::{
@@ -73,7 +74,9 @@ fn runner(client: &DragonflyClient, job: Job, tx: &SyncSender<SubmitJobResultsBo
 }
 
 fn main() -> Result<(), DragonflyError> {
-    tracing_subscriber::fmt().init();
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::from_env("LOG_LEVEL"))
+        .init();
     let client = Arc::new(DragonflyClient::new()?);
     let (tx, rx) = mpsc::sync_channel(1024);
 
