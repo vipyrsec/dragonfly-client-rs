@@ -1,16 +1,10 @@
 use crate::{
-    error::DragonflyError,
-    dragonfly_api::{
-        Job,
-        SubmitJobResultsSuccess,
-        SubmitJobResultsError,
-        send_success,
-        send_error,
-        fetch_access_token,
-        fetch_rules,
-        fetch_bulk_job,
-    },
     common::{TarballType, ZipType},
+    dragonfly_api::{
+        fetch_access_token, fetch_bulk_job, fetch_rules, send_error, send_success, Job,
+        SubmitJobResultsError, SubmitJobResultsSuccess,
+    },
+    error::DragonflyError,
     APP_CONFIG,
 };
 use flate2::read::GzDecoder;

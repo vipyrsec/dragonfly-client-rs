@@ -1,11 +1,11 @@
 mod api;
 mod app_config;
 mod common;
+mod dragonfly_api;
 mod error;
 mod exts;
 mod scanner;
 mod utils;
-mod dragonfly_api;
 
 use std::{
     sync::{
@@ -24,12 +24,8 @@ use tracing_subscriber::EnvFilter;
 use yara::Rules;
 
 use crate::{
-    dragonfly_api::{
-        Job,
-        SubmitJobResultsBody,
-        SubmitJobResultsError,
-    },
     common::APP_CONFIG,
+    dragonfly_api::{Job, SubmitJobResultsBody, SubmitJobResultsError},
     scanner::{scan_all_distributions, PackageScanResults},
 };
 

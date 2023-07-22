@@ -1,6 +1,6 @@
-use reqwest::blocking::Client;
 use crate::dragonfly_api::models;
 use crate::APP_CONFIG;
+use reqwest::blocking::Client;
 
 pub fn fetch_access_token(http_client: &Client) -> reqwest::Result<models::AuthResponse> {
     let url = format!("https://{}/oauth/token", APP_CONFIG.auth0_domain);
@@ -35,7 +35,10 @@ pub fn fetch_bulk_job(
         .json()
 }
 
-pub fn fetch_rules(http_client: &Client, access_token: &str) -> reqwest::Result<models::RulesResponse> {
+pub fn fetch_rules(
+    http_client: &Client,
+    access_token: &str,
+) -> reqwest::Result<models::RulesResponse> {
     http_client
         .get(format!("{}/rules", APP_CONFIG.base_url))
         .header("Authorization", format!("Bearer {access_token}"))
