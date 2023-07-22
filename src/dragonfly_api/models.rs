@@ -20,23 +20,6 @@ pub struct SubmitJobResultsSuccess {
     pub commit: String,
 }
 
-impl Display for SubmitJobResultsSuccess {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "Name: {}", self.name)?;
-        writeln!(f, "Version: {}", self.version)?;
-        writeln!(f, "Score: {}", self.score)?;
-        writeln!(
-            f,
-            "Inspector URL: {}",
-            &self.inspector_url.as_deref().unwrap_or("None")
-        )?;
-        writeln!(f, "Rules matched: {}", self.rules_matched.join(", "))?;
-        writeln!(f, "Commit hash: {}", self.commit)?;
-
-        Ok(())
-    }
-}
-
 #[derive(Debug, Serialize)]
 pub struct SubmitJobResultsError {
     pub name: String,

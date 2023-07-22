@@ -105,7 +105,7 @@ fn main() -> Result<(), DragonflyError> {
                     let _enter = span.enter();
 
                     trace!("Received success body, sending upstream...");
-                    trace!("Success body: {success_body}");
+                    trace!("Success body: {success_body:#?}");
                     if let Err(err) = client.send_success(&success_body) {
                         error!("Unexpected error while sending success: {err}");
                     } else {
