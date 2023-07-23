@@ -1,6 +1,5 @@
-mod api;
 mod app_config;
-mod dragonfly_api;
+mod client;
 mod error;
 mod exts;
 mod scanner;
@@ -14,7 +13,7 @@ use std::{
     time::Duration,
 };
 
-use api::DragonflyClient;
+use client::DragonflyClient;
 use error::DragonflyError;
 use reqwest::blocking::Client;
 use threadpool::ThreadPool;
@@ -24,7 +23,7 @@ use yara::Rules;
 
 use crate::{
     app_config::APP_CONFIG,
-    dragonfly_api::{Job, SubmitJobResultsBody, SubmitJobResultsError},
+    client::{Job, SubmitJobResultsBody, SubmitJobResultsError},
     scanner::{scan_all_distributions, PackageScanResults},
 };
 

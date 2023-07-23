@@ -1,4 +1,5 @@
-use crate::dragonfly_api::models;
+use super::models;
+
 use crate::APP_CONFIG;
 use reqwest::blocking::Client;
 

@@ -8,8 +8,7 @@ use reqwest::{blocking::Client, Url};
 use yara::Rules;
 
 use crate::{
-    api::{fetch_tarball, fetch_zipfile, TarballType, ZipType},
-    dragonfly_api::{Job, SubmitJobResultsSuccess},
+    client::{fetch_tarball, fetch_zipfile, Job, SubmitJobResultsSuccess, TarballType, ZipType},
     error::DragonflyError,
     exts::RuleExt,
     utils::create_inspector_url,
