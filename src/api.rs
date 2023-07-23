@@ -105,7 +105,7 @@ impl DragonflyClient {
                 trace!("Successfully obtained write lock!");
                 trace!("Requesting new access token...");
                 let new_access_token = self.reauthenticate();
-                trace!("Successfuly got new access token!");
+                trace!("Successfully got new access token!");
                 state.access_token = new_access_token;
                 info!("Successfully updated local access token to new one!");
                 info!("Fetching rules again...");
@@ -135,7 +135,7 @@ impl DragonflyClient {
                 trace!("Successfully obtained write lock!");
                 trace!("Requesting new access token...");
                 let new_access_token = self.reauthenticate();
-                trace!("Successfuly got new access token!");
+                trace!("Successfully got new access token!");
                 state.access_token = new_access_token;
                 info!("Successfully updated local access token to new one!");
                 info!("Doing a bulk fetch job again...");
@@ -158,7 +158,7 @@ impl DragonflyClient {
                 trace!("Successfully obtained write lock!");
                 trace!("Requesting new access token...");
                 let new_access_token = self.reauthenticate();
-                trace!("Successfuly got new access token!");
+                trace!("Successfully got new access token!");
                 state.access_token = new_access_token;
                 info!("Successfully updated local access token to new one!");
                 info!("Sending error body again...");
@@ -177,15 +177,15 @@ impl DragonflyClient {
             Err(http_err) if http_err.status() == Some(StatusCode::UNAUTHORIZED) => {
                 drop(state); // Drop the read lock
                 info!("Got 401 UNAUTHORIZED while sending success");
-                info!("Waiting on write lock to update access token");
+                trace!("Waiting on write lock to update access token");
                 let mut state = self.state.write().unwrap();
-                info!("Successfully obtained write lock!");
-                info!("Requesting new access token...");
+                trace!("Successfully obtained write lock!");
+                trace!("Requesting new access token...");
                 let new_access_token = self.reauthenticate();
-                info!("Successfuly got new access token!");
+                trace!("Successfully got new access token!");
                 state.access_token = new_access_token;
                 info!("Successfully updated local access token to new one!");
-                info!("Sending success body again");
+                info!("Sending success body again...");
                 send_success(self.get_http_client(), &state.access_token, body)
             }
 
