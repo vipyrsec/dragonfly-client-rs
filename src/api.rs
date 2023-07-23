@@ -1,5 +1,4 @@
 use crate::{
-    common::{TarballType, ZipType},
     dragonfly_api::{
         fetch_access_token, fetch_bulk_job, fetch_rules, send_error, send_success, Job,
         SubmitJobResultsError, SubmitJobResultsSuccess,
@@ -15,6 +14,12 @@ use std::{
     time::Duration,
 };
 use tracing::{error, info, trace, warn};
+
+/// Type alias representing a tar archive
+pub type TarballType = tar::Archive<Cursor<Vec<u8>>>;
+
+/// Type alias representing a zip archive
+pub type ZipType = zip::ZipArchive<Cursor<Vec<u8>>>;
 
 /// Application state
 pub struct State {
