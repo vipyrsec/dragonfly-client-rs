@@ -1,11 +1,10 @@
-use crate::{
-    dragonfly_api::{
-        fetch_access_token, fetch_bulk_job, fetch_rules, send_error, send_success, Job,
-        SubmitJobResultsError, SubmitJobResultsSuccess,
-    },
-    error::DragonflyError,
-    APP_CONFIG,
-};
+mod methods;
+mod models;
+
+pub use methods::*;
+pub use models::*;
+
+use crate::{error::DragonflyError, APP_CONFIG};
 use flate2::read::GzDecoder;
 use reqwest::{blocking::Client, StatusCode, Url};
 use std::{
