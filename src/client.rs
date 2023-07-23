@@ -32,6 +32,7 @@ pub struct State {
     pub access_token: String,
 }
 
+#[warn(clippy::module_name_repetitions)]
 pub struct DragonflyClient {
     pub client: Client,
     pub state: RwLock<State>,
