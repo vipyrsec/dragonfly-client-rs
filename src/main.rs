@@ -72,7 +72,7 @@ fn runner(client: &DragonflyClient, job: Job, tx: &SyncSender<SubmitJobResultsBo
 
 fn main() -> Result<(), DragonflyError> {
     tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_env("LOG_LEVEL"))
+        .with_env_filter(EnvFilter::from_default_env())
         .init();
     let client = Arc::new(DragonflyClient::new()?);
     let (tx, rx) = mpsc::sync_channel(1024);
