@@ -1,6 +1,5 @@
 mod api;
 mod app_config;
-mod common;
 mod dragonfly_api;
 mod error;
 mod exts;
@@ -24,7 +23,7 @@ use tracing_subscriber::EnvFilter;
 use yara::Rules;
 
 use crate::{
-    common::APP_CONFIG,
+    app_config::APP_CONFIG,
     dragonfly_api::{Job, SubmitJobResultsBody, SubmitJobResultsError},
     scanner::{scan_all_distributions, PackageScanResults},
 };

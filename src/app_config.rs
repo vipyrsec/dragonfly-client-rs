@@ -2,6 +2,7 @@ use figment::{
     providers::{Env, Format, Serialized, Toml},
     Figment,
 };
+use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize)]
@@ -55,3 +56,6 @@ impl AppConfig {
             .extract()
     }
 }
+
+/// The global, immutable application configuration.
+pub static APP_CONFIG: Lazy<AppConfig> = Lazy::new(|| AppConfig::build().unwrap());
