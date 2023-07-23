@@ -73,19 +73,15 @@ The client is comprised of a few discrete components, each running
 independently. These are the scanning threadpool, the loader thread, and the
 sender thread.
 
-#### The Scanning Threadpool
-Downloads and scans the releases.
+- The Scanning Threadpool - Downloads and scans the releases.
+- The Loader Thread - This thread is responsible for requesting jobs from the API and submitting them to the threadpool.
 
-#### The Loader Thread
-This thread is responsible for requesting jobs from the API and submitting them to the threadpool.
-
-#### The Sender Thread
-This thread is responsible for reporting the results to the API.
+- The Sender Thread - This thread is responsible for reporting the results to the API.
 
 ### Performance, efficiency, and optimization
 The client aims to be highly configurable to suit a variety of host machines.
 The environment variables of most value in this regard are as follows:
-- `DRAGONFLY_THREADS` defaults to the number of available parallellisms, or
+- `DRAGONFLY_THREADS` defaults to the number of available parallelism, or
   1 if it could not be determined. [This
   page](https://doc.rust-lang.org/stable/std/thread/fn.available_parallelism.html)
   explains in detail how this is calculated, but in short, it is often the
@@ -193,6 +189,6 @@ they do
 | `DRAGONFLY_CLIENT_SECRET` |                                  | Auth0 client secret                       |
 | `DRAGONFLY_USERNAME`      |                                  | Provisioned username                      |
 | `DRAGONFLY_PASSWORD`      |                                  | Provisioned password                      |
-| `DRAGONFLY_THREADS`       | Available paralellism / `1`      | Attemps to auto-detect the amount of threads, or defaults to 1 if not possible |
+| `DRAGONFLY_THREADS`       | Available parallelism / `1`      | Attemps to auto-detect the amount of threads, or defaults to 1 if not possible |
 | `DRAGONFLY_LOAD_DURATION` | 60                               | Seconds to wait between each API job request |
 | `DRAGONFLY_BULK_SIZE`     | 20                               | The amount of jobs to request at once and load into the internal queue |
