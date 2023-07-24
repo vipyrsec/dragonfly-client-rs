@@ -138,6 +138,8 @@ fn main() -> Result<(), DragonflyError> {
                     debug!("Bulk job request returned no jobs");
                 }
 
+                info!("Successfully fetched {} jobs", jobs.len());
+
                 for job in jobs {
                     info!("Submitting {} v{} for execution", job.name, job.version);
                     let state = client.state.read().unwrap();
