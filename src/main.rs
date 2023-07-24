@@ -1,195 +1,170 @@
-mod api;
-mod api_models;
+mod app_config;
+mod client;
 mod error;
+mod exts;
 mod scanner;
+mod utils;
 
-use std::{path::Path, sync::Arc, thread, time::Duration};
-
-use api::DragonflyClient;
-use api_models::Job;
-use error::DragonflyError;
-use figment::{
-    providers::{Env, Format, Serialized, Toml},
-    Figment,
+use std::{
+    sync::{
+        mpsc::{self, SyncSender},
+        Arc,
+    },
+    time::Duration,
 };
-use reqwest::StatusCode;
-use scanner::{scan_distribution, DistributionScanResults};
-use serde::{Deserialize, Serialize};
-use threadpool::ThreadPool;
-use tracing::{error, info, span, Level};
 
-fn create_inspector_url(name: &str, version: &str, download_url: &str, path: &Path) -> String {
-    let mut url = reqwest::Url::parse(download_url).unwrap();
-    let new_path = format!(
-        "project/{}/{}/{}/{}",
-        name,
-        version,
-        url.path().strip_prefix('/').unwrap(),
-        path.display()
+use client::DragonflyClient;
+use error::DragonflyError;
+use reqwest::blocking::Client;
+use threadpool::ThreadPool;
+use tracing::{debug, error, info, span, trace, Level};
+use tracing_subscriber::EnvFilter;
+use yara::Rules;
+
+use crate::{
+    app_config::APP_CONFIG,
+    client::{Job, SubmitJobResultsBody, SubmitJobResultsError},
+    scanner::{scan_all_distributions, PackageScanResults},
+};
+
+/// The actual scanning logic.
+///
+/// Takes the job to be scanned, the compiled rules, the commit hash being used, and the HTTP
+/// client (for downloading distributions), and returns the `PackageScanResults`.
+fn scanner(
+    http_client: &Client,
+    job: &Job,
+    rules: &Rules,
+    commit_hash: &str,
+) -> Result<PackageScanResults, DragonflyError> {
+    let distribution_scan_results = scan_all_distributions(http_client, rules, job)?;
+
+    let package_scan_result = PackageScanResults::new(
+        job.name.to_string(),
+        job.version.to_string(),
+        distribution_scan_results,
+        commit_hash.to_string(),
     );
 
-    url.set_host(Some("inspector.pypi.io")).unwrap();
-    url.set_path(&new_path);
-
-    url.into()
+    Ok(package_scan_result)
 }
 
-fn do_job(client: &DragonflyClient, job: &Job) -> Result<(), DragonflyError> {
-    let mut distribution_results: Vec<DistributionScanResults> = Vec::new();
-    for download_url in &job.distributions {
-        let result = scan_distribution(client, download_url)?;
-        distribution_results.push(result);
-    }
-
-    let highest_score_distribution = distribution_results
-        .iter()
-        .max_by_key(|distrib| distrib.get_total_score())
-        .unwrap();
-
-    let inspector_url =
-        if let Some(most_malicious_file) = &highest_score_distribution.get_most_malicious_file() {
-            let url = create_inspector_url(
-                &job.name,
-                &job.version,
-                highest_score_distribution.download_url(),
-                &most_malicious_file.path,
-            );
-
-            Some(url)
-        } else {
-            None
-        };
-
-    let score = if inspector_url.is_some() {
-        highest_score_distribution.get_total_score()
-    } else {
-        0
+/// The job to run in the threadpool.
+fn runner(client: &DragonflyClient, job: Job, tx: &SyncSender<SubmitJobResultsBody>) {
+    let span = span!(Level::INFO, "Job", name = job.name, version = job.version);
+    let _enter = span.enter();
+    let state = client.state.read().unwrap();
+    let send_result = match scanner(client.get_http_client(), &job, &state.rules, &state.hash) {
+        Ok(package_scan_results) => tx.send(SubmitJobResultsBody::Success(
+            package_scan_results.build_body(),
+        )),
+        Err(err) => tx.send(SubmitJobResultsBody::Error(SubmitJobResultsError {
+            name: job.name,
+            version: job.version,
+            reason: format!("{err:#?}"),
+        })),
     };
-    let inspector_url = inspector_url.as_deref();
-    let rules_matched = &highest_score_distribution.get_all_rules();
 
-    // We perform this validation here instead of upstream (i.e in runner) because
-    // here, we only have to re-send the HTTP request with the same results
-    // If we did it upstream (i.e in runner), we'd need to run the whole scanning process again
-    if let Err(err) = client.submit_job_results(job, score, inspector_url, rules_matched) {
-        if let Some(StatusCode::UNAUTHORIZED) = err.status() {
-            info!(
-                "Got 401 UNAUTHORIZED while trying to send results upstream, revalidating creds..."
-            );
-            client.reauthorize()?;
-            info!("Successfully reauthorized! Sending results again...");
-            client.submit_job_results(job, score, inspector_url, rules_matched)?;
-            info!("Successfully sent results!");
-        }
-    }
-
-    Ok(())
-}
-
-fn runner(client: &DragonflyClient, job: &Job) -> Result<(), DragonflyError> {
-    info!("Starting job {}@{}", job.name, job.version);
-
-    // Control when the MutexGuard is dropped
-    {
-        let mut state = client.state.lock().unwrap();
-        if state.hash != job.hash {
-            info!("Local hash: {}, remote hash: {}", state.hash, job.hash);
-            info!("State is behind, syncing...");
-            let (hash, rules) = client.fetch_rules()?;
-            info!("Successfully synced state, we are now on hash {hash}");
-
-            state.set_hash(hash);
-            state.set_rules(rules);
-        }
-    }
-
-    do_job(client, job)?;
-    info!("Successfully sent results upstream");
-
-    Ok(())
-}
-
-#[derive(Deserialize, Serialize)]
-pub struct AppConfig {
-    pub base_url: String,
-    pub auth0_domain: String,
-    pub audience: String,
-    pub grant_type: String,
-    pub client_id: String,
-    pub client_secret: String,
-    pub username: String,
-    pub password: String,
-    pub threads: usize,
-    pub wait_duration: u64,
-}
-
-impl Default for AppConfig {
-    fn default() -> AppConfig {
-        AppConfig {
-            base_url: String::from("https://dragonfly.vipyrsec.com"),
-            auth0_domain: String::from("vipyrsec.us.auth0.com"),
-            audience: String::from("https://dragonfly.vipyrsec.com"),
-            grant_type: String::from("password"),
-            client_id: String::new(),
-            client_secret: String::new(),
-            username: String::new(),
-            password: String::new(),
-            threads: 1,
-            wait_duration: 60u64,
-        }
+    if send_result.is_err() {
+        error!("No more receivers listening across channel!");
     }
 }
 
 fn main() -> Result<(), DragonflyError> {
-    let config: AppConfig = Figment::from(Serialized::defaults(AppConfig::default()))
-        .merge(Toml::file("Config.toml"))
-        .merge(Env::prefixed("DRAGONFLY_"))
-        .extract()?;
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::from_default_env())
+        .init();
+    let client = Arc::new(DragonflyClient::new()?);
+    let (tx, rx) = mpsc::sync_channel(1024);
 
-    tracing_subscriber::fmt().init();
-    let client = Arc::new(DragonflyClient::new(config)?);
-
-    let n_jobs = client.config.threads;
+    // We spawn `n_jobs` threads using a threadpool for processing jobs, +1 more thread to send the
+    // results. The main thread will handle requesting the jobs and submitting them to the threadpool.
+    let n_jobs = APP_CONFIG.threads;
     let pool = ThreadPool::new(n_jobs);
-    info!("Started threadpool with {} workers", n_jobs);
+    debug!("Started threadpool with {} workers", n_jobs);
 
-    for _ in 0..n_jobs {
+    // Spawning the "sender" thread
+    std::thread::spawn({
         let client = Arc::clone(&client);
-        pool.execute(move || loop {
-            match client.get_job() {
-                Ok(Some(job)) => {
-                    // Set up logging
-                    let span =
-                        span!(Level::INFO, "Job", name = job.name, version = job.version);
+        trace!("Starting loader thread");
+        move || loop {
+            match rx.recv() {
+                Ok(SubmitJobResultsBody::Success(success_body)) => {
+                    let span = span!(
+                        Level::INFO,
+                        "Job",
+                        name = success_body.name,
+                        version = success_body.version
+                    );
                     let _enter = span.enter();
 
-                    if let Err(err) = runner(&client, &job) {
-                        error!("Unexpected error: {err:#?}");
+                    trace!("Received success body, sending upstream...");
+                    trace!("Success body: {success_body:#?}");
+                    if let Err(err) = client.send_success(&success_body) {
+                        error!("Unexpected error while sending success: {err}");
+                    } else {
+                        info!("Successfully sent success!");
                     }
-                },
+                }
 
-                Ok(None) => {
-                    let s = client.config.wait_duration;
-                    info!("No job found! Trying again in {s} seconds...");
-                    thread::sleep(Duration::from_secs(s));
-                },
+                Ok(SubmitJobResultsBody::Error(error_body)) => {
+                    let span = span!(
+                        Level::INFO,
+                        "Job",
+                        name = error_body.name,
+                        version = error_body.version
+                    );
+                    let _enter = span.enter();
 
-                Err(http_error) if http_error.status() == Some(StatusCode::UNAUTHORIZED) => {
-                    info!("Got 401 UNAUTHORIZED while fetching rules, revalidating credentials and trying again...");
-                    if let Err(reauth_error) = client.reauthorize() {
-                        error!("Failed reauthorizing credentials! {reauth_error:#?}");
-                        continue;
+                    trace!("Received error body, sending upstream...");
+                    trace!("Error body: {error_body}");
+                    if let Err(err) = client.send_error(&error_body) {
+                        error!("Unexpected error while sending error: {err}");
+                    } else {
+                        info!("Successfully sent error!");
                     }
+                }
 
-                    info!("Successfully reauthorized, will use new credentials next time around");
-                },
-
-                Err(err) => error!("Unexpected error while fetching rules: {err:#?}")
+                Err(_) => error!("No more transmitters!"),
             }
-        });
+        }
+    });
+
+    loop {
+        info!("Fetching {} bulk jobs...", APP_CONFIG.bulk_size);
+        match client.bulk_get_job(APP_CONFIG.bulk_size) {
+            Ok(jobs) => {
+                if jobs.is_empty() {
+                    debug!("Bulk job request returned no jobs");
+                }
+
+                for job in jobs {
+                    info!("Submitting {} v{} for execution", job.name, job.version);
+                    let state = client.state.read().unwrap();
+                    if job.hash != client.state.read().unwrap().hash {
+                        info!(
+                            "Must update rules, updating from {} to {}",
+                            state.hash, job.hash
+                        );
+                        drop(state);
+                        if let Err(err) = client.update_rules() {
+                            error!("Error while updating rules: {err}");
+                        }
+                    }
+
+                    pool.execute({
+                        let client = Arc::clone(&client);
+                        let tx = tx.clone();
+                        move || runner(&client, job, &tx)
+                    });
+                }
+
+                trace!("Finished loading jobs into queue!");
+            }
+
+            Err(err) => error!("Unexpected HTTP error: {err}"),
+        }
+
+        std::thread::sleep(Duration::from_secs(APP_CONFIG.load_duration));
     }
-
-    pool.join();
-
-    Ok(())
 }
