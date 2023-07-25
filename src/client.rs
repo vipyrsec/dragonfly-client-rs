@@ -54,7 +54,7 @@ impl DragonflyClient {
         Ok(Self { client, state })
     }
 
-    /// Update the state with a new access token, using the given write lock [`RwLockWriteGuard`]
+    /// Update the state with a new access token.
     ///
     /// If an error occurs while reauthenticating, the function retries with an exponential backoff
     /// described by the equation `min(10 * 60, 2^(x - 1))` where `x` is the number of failed tries.
