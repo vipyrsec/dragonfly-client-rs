@@ -1,12 +1,11 @@
+---
 name: Container Build and Push
 
 on:
   workflow_dispatch:
   push:
-    branches:
-      - main
-    tags:
-      - v*
+    branches: [main]
+    tags: [v*]
 
 permissions:
   contents: read
@@ -31,24 +30,37 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        platform:
-          - linux/amd64
+        platform: [linux/amd64]
 
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout repository
-        uses: actions/checkout@c85c95e3d7251135ab7dc9ce3241c5835cc595a9 # v3.5.3
+        uses: actions/checkout@c85c95e3d7251135ab7dc9ce3241c5835cc595a9  # v3.5.3
 
       - name: Install cosign
-        uses: sigstore/cosign-installer@6e04d228eb30da1757ee4e1dd75a0ec73a653e06 # v3.1.1
+        uses: sigstore/cosign-installer@6e04d228eb30da1757ee4e1dd75a0ec73a653e06  # v3.1.1
         with:
-          cosign-release: "v2.0.2"
+          cosign-release: v2.0.2
 
       - name: Setup Docker Buildx
-        uses: docker/setup-buildx-action@4c0219f9ac95b02789c1075625400b2acbff50b1 # v2.9.1
+        id: buildx
+        uses: docker/setup-buildx-action@4c0219f9ac95b02789c1075625400b2acbff50b1  # v2.9.1
+        with:
+          install: true
+          cleanup: false
+          platforms: ${{ matrix.platform }}
+          config-inline: |
+            [worker.oci]
+            gc = true
+            gckeepstorage = 10000  # 10 GB
+
+            [[worker.oci.gcpolicy]]
+            all = true
+            keepBytes = 10000000000  # 10 GB
+            keepDuration = 7776000  # 90 days
 
       - name: Log into registry ${{ env.REGISTRY }}
-        uses: docker/login-action@465a07811f14bebb1938fbed4728c6a1ff8901fc # v2.2.0
+        uses: docker/login-action@465a07811f14bebb1938fbed4728c6a1ff8901fc  # v2.2.0
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -56,7 +68,7 @@ jobs:
 
       - name: Extract Docker metadata
         id: docker_meta
-        uses: docker/metadata-action@818d4b7b91585d195f67373fd9cb0332e31a7175 # v4.6.0
+        uses: docker/metadata-action@818d4b7b91585d195f67373fd9cb0332e31a7175  # v4.6.0
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
@@ -66,10 +78,22 @@ jobs:
             type=ref,event=tag
             type=sha,format=long
 
+      - name: Inject Docker Build(x|Kit) cache mounts
+        uses: sid-maddy/buildkit-cache-dance/inject@main
+        with:
+          cache-mounts: |
+            cargo-registry,/usr/local/cargo/registry
+            rust-target-release,/app/target
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          key: rust-buildkit-cache-${{ matrix.platform }}-${{ hashFiles('Cargo.toml', 'Cargo.lock') }}
+          restore-keys: |
+            rust-buildkit-cache-${{ matrix.platform }}-
+
       - name: Build and push Docker image
         id: docker_build_push
-        uses: docker/build-push-action@2eb1c1961a95fc15694676618e422e8ba1d63825 # v4.1.1
+        uses: docker/build-push-action@2eb1c1961a95fc15694676618e422e8ba1d63825  # v4.1.1
         with:
+          builder: ${{ steps.buildx.outputs.name }}
           cache-from: type=gha,scope=${{ matrix.platform }}
           cache-to: type=gha,mode=max,scope=${{ matrix.platform }}
           file: Containerfile
@@ -78,13 +102,23 @@ jobs:
           push: true
           tags: ${{ steps.docker_meta.outputs.tags }}
 
+      - name: Extract Docker Build(x|Kit) cache mounts
+        uses: sid-maddy/buildkit-cache-dance/extract@main
+        with:
+          cache-mounts: |
+            cargo-registry,/usr/local/cargo/registry
+            rust-target-release,/app/target
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          key: rust-buildkit-cache-${{ matrix.platform }}-${{ hashFiles('Cargo.toml', 'Cargo.lock') }}
+
       # Sign the resulting Docker image digest.
       # This will only write to the public Rekor transparency log when the Docker repository is public to avoid leaking
       # data. If you would like to publish transparency data even for private images, pass --force to cosign below.
       # https://github.com/sigstore/cosign
       - name: Sign the published Docker image
         env:
-          COSIGN_EXPERIMENTAL: "true"
+          COSIGN_EXPERIMENTAL: 'true'
+        shell: bash
         # This step uses the identity token to provision an ephemeral certificate against the sigstore community Fulcio
         # instance.
         run: cosign sign ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.docker_build_push.outputs.digest }}
@@ -96,7 +130,7 @@ jobs:
           touch "/tmp/digests/${digest#sha256:}"
 
       - name: Upload digest
-        uses: actions/upload-artifact@0b7f8abb1508181956e8e162db84b466c27e18ce # v3.1.2
+        uses: actions/upload-artifact@0b7f8abb1508181956e8e162db84b466c27e18ce  # v3.1.2
         with:
           if-no-files-found: error
           name: digests
@@ -104,22 +138,21 @@ jobs:
           retention-days: 1
 
   merge:
-    runs-on: ubuntu-22.04
-    needs:
-      - build-push
+    needs: [build-push]
 
+    runs-on: ubuntu-22.04
     steps:
       - name: Download digests
-        uses: actions/download-artifact@9bc31d5ccc31df68ecc42ccf4149144866c47d8a # v3.0.2
+        uses: actions/download-artifact@9bc31d5ccc31df68ecc42ccf4149144866c47d8a  # v3.0.2
         with:
           name: digests
           path: /tmp/digests
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@4c0219f9ac95b02789c1075625400b2acbff50b1 # v2.9.1
+        uses: docker/setup-buildx-action@4c0219f9ac95b02789c1075625400b2acbff50b1  # v2.9.1
 
       - name: Log into registry ${{ env.REGISTRY }}
-        uses: docker/login-action@465a07811f14bebb1938fbed4728c6a1ff8901fc # v2.2.0
+        uses: docker/login-action@465a07811f14bebb1938fbed4728c6a1ff8901fc  # v2.2.0
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -127,7 +160,7 @@ jobs:
 
       - name: Extract Docker metadata
         id: docker_meta
-        uses: docker/metadata-action@818d4b7b91585d195f67373fd9cb0332e31a7175 # v4.6.0
+        uses: docker/metadata-action@818d4b7b91585d195f67373fd9cb0332e31a7175  # v4.6.0
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
@@ -138,6 +171,7 @@ jobs:
             type=sha,format=long
 
       - name: Create manifest list and push
+        shell: bash
         working-directory: /tmp/digests
         run: |
           docker buildx imagetools create \
@@ -145,5 +179,6 @@ jobs:
             $(printf ' ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@sha256:%s ' *)
 
       - name: Inspect image
-        run: |
+        shell: bash
+        run: |-
           docker buildx imagetools inspect '${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.docker_meta.outputs.version }}'
