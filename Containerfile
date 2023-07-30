@@ -43,7 +43,9 @@ COPY Cargo.lock Cargo.lock
 FROM build-base AS build-debug
 ARG PROJECT
 
-RUN <<EOT
+RUN --mount=type=cache,id=cargo-registry,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=rust-target-debug,target=/app/target \
+    <<EOT
 #!/usr/bin/env bash
 set -eu
 
@@ -54,7 +56,9 @@ rm src/main.rs target/debug/deps/${PROJECT//-/_}*
 EOT
 
 COPY src src
-RUN cargo build --frozen
+RUN --mount=type=cache,id=cargo-registry,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=rust-target-debug,target=/app/target \
+    cargo build --locked && cp /app/target/debug/${PROJECT} /app/${PROJECT}
 
 # ==================================================
 FROM gcr.io/distroless/cc-debian${DEBIAN_VERSION_NUMBER}:debug-nonroot AS debug
@@ -62,7 +66,7 @@ ARG PROJECT
 
 WORKDIR /app
 
-COPY --from=build-debug /app/target/debug/${PROJECT} ./${PROJECT}
+COPY --from=build-debug /app/${PROJECT} ./${PROJECT}
 
 ENTRYPOINT ["./dragonfly-client-rs"]
 
@@ -71,7 +75,9 @@ ENTRYPOINT ["./dragonfly-client-rs"]
 FROM build-base AS build-release
 ARG PROJECT
 
-RUN <<EOT
+RUN --mount=type=cache,id=cargo-registry,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=rust-target-release,target=/app/target \
+    <<EOT
 #!/usr/bin/env bash
 set -eu
 
@@ -82,7 +88,9 @@ rm src/main.rs target/release/deps/${PROJECT//-/_}*
 EOT
 
 COPY src src
-RUN cargo build --frozen --release
+RUN --mount=type=cache,id=cargo-registry,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=rust-target-release,target=/app/target \
+    cargo build --locked --release && cp /app/target/release/${PROJECT} /app/${PROJECT}
 
 # ==================================================
 FROM gcr.io/distroless/cc-debian${DEBIAN_VERSION_NUMBER}:nonroot AS release
@@ -90,6 +98,6 @@ ARG PROJECT
 
 WORKDIR /app
 
-COPY --from=build-release /app/target/release/${PROJECT} ./${PROJECT}
+COPY --from=build-release /app/${PROJECT} ./${PROJECT}
 
 ENTRYPOINT ["./dragonfly-client-rs"]
