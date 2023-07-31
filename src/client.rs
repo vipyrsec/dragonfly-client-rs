@@ -6,10 +6,10 @@ pub use models::*;
 
 use crate::{error::DragonflyError, APP_CONFIG};
 use flate2::read::GzDecoder;
+use parking_lot::{Condvar, Mutex, RwLock};
 use reqwest::{blocking::Client, StatusCode, Url};
 use std::{
     io::{Cursor, Read},
-    sync::{Condvar, Mutex, RwLock},
     time::Duration,
 };
 use tracing::{error, info, trace, warn};
@@ -69,14 +69,11 @@ impl DragonflyClient {
     /// described by the equation `min(10 * 60, 2^(x - 1))` where `x` is the number of failed tries.
     pub fn reauthenticate(&self) {
         trace!("Trying to lock to check if we're authenticating.");
-        let mut authing = self.authentication_state.authenticating.lock().unwrap();
+        let mut authing = self.authentication_state.authenticating.lock();
         trace!("Acquired lock");
         if *authing {
             trace!("Another thread is authenticating. Waiting for it to finish.");
-            let _guard = self
-                .authentication_state
-                .cvar
-                .wait_while(authing, |authing| *authing);
+            self.authentication_state.cvar.wait(&mut authing);
             trace!("Was notified, returning");
             return;
         }
@@ -115,9 +112,9 @@ impl DragonflyClient {
 
         trace!("Successfully got new access token!");
 
-        *self.authentication_state.access_token.write().unwrap() = access_token;
+        *self.authentication_state.access_token.write() = access_token;
 
-        let mut authing = self.authentication_state.authenticating.lock().unwrap();
+        let mut authing = self.authentication_state.authenticating.lock();
         *authing = false;
         self.authentication_state.cvar.notify_all();
 
@@ -128,7 +125,7 @@ impl DragonflyClient {
     pub fn update_rules(&self) -> Result<(), DragonflyError> {
         let response = match fetch_rules(
             self.get_http_client(),
-            &self.authentication_state.access_token.read().unwrap(),
+            &self.authentication_state.access_token.read(),
         ) {
             Err(err) if err.status() == Some(StatusCode::UNAUTHORIZED) => {
                 info!("Got 401 UNAUTHORIZED while updating rules");
@@ -136,7 +133,7 @@ impl DragonflyClient {
                 info!("Fetching rules again...");
                 fetch_rules(
                     self.get_http_client(),
-                    &self.authentication_state.access_token.read().unwrap(),
+                    &self.authentication_state.access_token.read(),
                 )
             }
 
@@ -145,7 +142,7 @@ impl DragonflyClient {
             Err(err) => Err(err),
         }?;
 
-        let mut rules_state = self.rules_state.write().unwrap();
+        let mut rules_state = self.rules_state.write();
         rules_state.rules = response.compile()?;
         rules_state.hash = response.hash;
 
@@ -153,7 +150,7 @@ impl DragonflyClient {
     }
 
     pub fn bulk_get_job(&self, n_jobs: usize) -> reqwest::Result<Vec<Job>> {
-        let access_token = self.authentication_state.access_token.read().unwrap();
+        let access_token = self.authentication_state.access_token.read();
         match fetch_bulk_job(self.get_http_client(), &access_token, n_jobs) {
             Err(err) if err.status() == Some(StatusCode::UNAUTHORIZED) => {
                 drop(access_token); // Drop the read lock
@@ -162,7 +159,7 @@ impl DragonflyClient {
                 info!("Doing a bulk fetch job again...");
                 fetch_bulk_job(
                     self.get_http_client(),
-                    &self.authentication_state.access_token.read().unwrap(),
+                    &self.authentication_state.access_token.read(),
                     n_jobs,
                 )
             }
@@ -173,7 +170,7 @@ impl DragonflyClient {
 
     /// Report an error to the server.
     pub fn send_error(&self, body: &SubmitJobResultsError) -> reqwest::Result<()> {
-        let access_token = self.authentication_state.access_token.read().unwrap();
+        let access_token = self.authentication_state.access_token.read();
         match send_error(self.get_http_client(), &access_token, body) {
             Err(http_err) if http_err.status() == Some(StatusCode::UNAUTHORIZED) => {
                 drop(access_token); // Drop the read lock
@@ -182,7 +179,7 @@ impl DragonflyClient {
                 info!("Sending error body again...");
                 send_error(
                     self.get_http_client(),
-                    &self.authentication_state.access_token.read().unwrap(),
+                    &self.authentication_state.access_token.read(),
                     body,
                 )
             }
@@ -194,7 +191,7 @@ impl DragonflyClient {
     /// Submit the results of a scan to the server, given the job and the scan results of each
     /// distribution
     pub fn send_success(&self, body: &SubmitJobResultsSuccess) -> reqwest::Result<()> {
-        let access_token = self.authentication_state.access_token.read().unwrap();
+        let access_token = self.authentication_state.access_token.read();
         match send_success(self.get_http_client(), &access_token, body) {
             Err(http_err) if http_err.status() == Some(StatusCode::UNAUTHORIZED) => {
                 drop(access_token); // Drop the read lock
@@ -203,7 +200,7 @@ impl DragonflyClient {
                 info!("Sending success body again...");
                 send_success(
                     self.get_http_client(),
-                    &self.authentication_state.access_token.read().unwrap(),
+                    &self.authentication_state.access_token.read(),
                     body,
                 )
             }
