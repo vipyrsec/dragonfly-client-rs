@@ -53,7 +53,7 @@ fn scanner(
 fn runner(client: &DragonflyClient, job: Job, tx: &SyncSender<SubmitJobResultsBody>) {
     let span = span!(Level::INFO, "Job", name = job.name, version = job.version);
     let _enter = span.enter();
-    let state = client.state.read().unwrap();
+    let state = client.state.read();
     let send_result = match scanner(client.get_http_client(), &job, &state.rules, &state.hash) {
         Ok(package_scan_results) => tx.send(SubmitJobResultsBody::Success(
             package_scan_results.build_body(),
@@ -142,8 +142,8 @@ fn main() -> Result<(), DragonflyError> {
 
                 for job in jobs {
                     info!("Submitting {} v{} for execution", job.name, job.version);
-                    let state = client.state.read().unwrap();
-                    if job.hash != client.state.read().unwrap().hash {
+                    let state = client.state.upgradable_read();
+                    if job.hash != client.state.read().hash {
                         info!(
                             "Must update rules, updating from {} to {}",
                             state.hash, job.hash

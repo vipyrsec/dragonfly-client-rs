@@ -6,10 +6,10 @@ pub use models::*;
 
 use crate::{error::DragonflyError, APP_CONFIG};
 use flate2::read::GzDecoder;
+use parking_lot::{RwLock, RwLockUpgradableReadGuard};
 use reqwest::{blocking::Client, StatusCode, Url};
 use std::{
     io::{Cursor, Read},
-    sync::RwLock,
     time::Duration,
 };
 use tracing::{error, info, trace, warn};
@@ -32,7 +32,7 @@ pub struct State {
     pub access_token: String,
 }
 
-#[warn(clippy::module_name_repetitions)]
+#[allow(clippy::module_name_repetitions)]
 pub struct DragonflyClient {
     pub client: Client,
     pub state: RwLock<State>,
@@ -94,14 +94,11 @@ impl DragonflyClient {
 
     /// Update the global ruleset. Waits for a write lock.
     pub fn update_rules(&self) -> Result<(), DragonflyError> {
-        let response = match fetch_rules(
-            self.get_http_client(),
-            &self.state.read().unwrap().access_token,
-        ) {
+        let response = match fetch_rules(self.get_http_client(), &self.state.read().access_token) {
             Err(err) if err.status() == Some(StatusCode::UNAUTHORIZED) => {
                 info!("Got 401 UNAUTHORIZED while updating rules");
                 trace!("Waiting on write lock to update access token");
-                let mut state = self.state.write().unwrap();
+                let mut state = self.state.write();
                 trace!("Successfully obtained write lock!");
                 trace!("Requesting new access token...");
                 let new_access_token = self.reauthenticate();
@@ -117,7 +114,7 @@ impl DragonflyClient {
             Err(err) => Err(err),
         }?;
 
-        let mut state = self.state.write().unwrap();
+        let mut state = self.state.write();
         state.rules = response.compile()?;
         state.hash = response.hash;
 
@@ -125,14 +122,13 @@ impl DragonflyClient {
     }
 
     pub fn bulk_get_job(&self, n_jobs: usize) -> reqwest::Result<Vec<Job>> {
-        let state = self.state.read().unwrap();
+        let state = self.state.upgradable_read();
         match fetch_bulk_job(self.get_http_client(), &state.access_token, n_jobs) {
             Err(err) if err.status() == Some(StatusCode::UNAUTHORIZED) => {
-                drop(state); // Drop the read lock
                 info!("Got 401 UNAUTHORIZED while doing a bulk fetch job request");
-                trace!("Waiting on write lock to update access token");
-                let mut state = self.state.write().unwrap();
-                trace!("Successfully obtained write lock!");
+                trace!("Attempting to upgrade to write lock");
+                let mut state = RwLockUpgradableReadGuard::upgrade(state);
+                trace!("Successfully upgraded to write lock!");
                 trace!("Requesting new access token...");
                 let new_access_token = self.reauthenticate();
                 trace!("Successfully got new access token!");
@@ -148,14 +144,13 @@ impl DragonflyClient {
 
     /// Report an error to the server.
     pub fn send_error(&self, body: &SubmitJobResultsError) -> reqwest::Result<()> {
-        let state = self.state.read().unwrap();
+        let state = self.state.upgradable_read();
         match send_error(self.get_http_client(), &state.access_token, body) {
             Err(http_err) if http_err.status() == Some(StatusCode::UNAUTHORIZED) => {
-                drop(state); // Drop the read lock
                 info!("Got 401 UNAUTHORIZED while sending success");
-                trace!("Waiting on write lock to update access token");
-                let mut state = self.state.write().unwrap();
-                trace!("Successfully obtained write lock!");
+                trace!("Attempting to upgrade to write lock");
+                let mut state = RwLockUpgradableReadGuard::upgrade(state);
+                trace!("Successfully upgraded to write lock!");
                 trace!("Requesting new access token...");
                 let new_access_token = self.reauthenticate();
                 trace!("Successfully got new access token!");
@@ -172,13 +167,12 @@ impl DragonflyClient {
     /// Submit the results of a scan to the server, given the job and the scan results of each
     /// distribution
     pub fn send_success(&self, body: &SubmitJobResultsSuccess) -> reqwest::Result<()> {
-        let state = self.state.read().unwrap();
+        let state = self.state.upgradable_read();
         match send_success(self.get_http_client(), &state.access_token, body) {
             Err(http_err) if http_err.status() == Some(StatusCode::UNAUTHORIZED) => {
-                drop(state); // Drop the read lock
                 info!("Got 401 UNAUTHORIZED while sending success");
-                trace!("Waiting on write lock to update access token");
-                let mut state = self.state.write().unwrap();
+                trace!("Attempting to upgrade to write lock");
+                let mut state = RwLockUpgradableReadGuard::upgrade(state);
                 trace!("Successfully obtained write lock!");
                 trace!("Requesting new access token...");
                 let new_access_token = self.reauthenticate();
