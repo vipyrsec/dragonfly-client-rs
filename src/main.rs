@@ -6,10 +6,7 @@ mod scanner;
 mod utils;
 
 use std::{
-    sync::{
-        mpsc::{self, SyncSender},
-        Arc,
-    },
+    sync::Arc,
     time::Duration,
 };
 
@@ -23,7 +20,7 @@ use yara::Rules;
 
 use crate::{
     app_config::APP_CONFIG,
-    client::{Job, SubmitJobResultsBody, SubmitJobResultsError},
+    client::{Job, SubmitJobResultsError},
     scanner::{scan_all_distributions, PackageScanResults},
 };
 
@@ -50,28 +47,31 @@ fn scanner(
 }
 
 /// The job to run in the threadpool.
-fn runner(client: &DragonflyClient, job: Job, tx: &SyncSender<SubmitJobResultsBody>) {
+fn runner(client: &DragonflyClient, job: Job) {
     let span = span!(Level::INFO, "Job", name = job.name, version = job.version);
     let _enter = span.enter();
     let rules_state = client.rules_state.read().unwrap();
-    let send_result = match scanner(
-        client.get_http_client(),
-        &job,
-        &rules_state.rules,
-        &rules_state.hash,
-    ) {
-        Ok(package_scan_results) => tx.send(SubmitJobResultsBody::Success(
-            package_scan_results.build_body(),
-        )),
-        Err(err) => tx.send(SubmitJobResultsBody::Error(SubmitJobResultsError {
-            name: job.name,
-            version: job.version,
-            reason: format!("{err:#?}"),
-        })),
+
+    let send_result = match scanner(client.get_http_client(), &job, &rules_state.rules, &rules_state.hash) {
+        Ok(package_scan_results) => {
+            let body = package_scan_results.build_body();
+
+            client.send_success(&body)
+        }
+
+        Err(err) => {
+            let body = SubmitJobResultsError {
+                name: job.name,
+                version: job.version,
+                reason: format!("{err}")
+            };
+
+            client.send_error(&body)
+        }
     };
 
-    if send_result.is_err() {
-        error!("No more receivers listening across channel!");
+    if let Err(err) = send_result {
+        error!("Error while sending response to API: {err}");
     }
 }
 
@@ -80,60 +80,12 @@ fn main() -> Result<(), DragonflyError> {
         .with_env_filter(EnvFilter::from_default_env())
         .init();
     let client = Arc::new(DragonflyClient::new()?);
-    let (tx, rx) = mpsc::sync_channel(1024);
 
     // We spawn `n_jobs` threads using a threadpool for processing jobs, +1 more thread to send the
     // results. The main thread will handle requesting the jobs and submitting them to the threadpool.
     let n_jobs = APP_CONFIG.threads;
     let pool = ThreadPool::new(n_jobs);
     debug!("Started threadpool with {} workers", n_jobs);
-
-    // Spawning the "sender" thread
-    std::thread::spawn({
-        let client = Arc::clone(&client);
-        trace!("Starting loader thread");
-        move || loop {
-            match rx.recv() {
-                Ok(SubmitJobResultsBody::Success(success_body)) => {
-                    let span = span!(
-                        Level::INFO,
-                        "Job",
-                        name = success_body.name,
-                        version = success_body.version
-                    );
-                    let _enter = span.enter();
-
-                    trace!("Received success body, sending upstream...");
-                    trace!("Success body: {success_body:#?}");
-                    if let Err(err) = client.send_success(&success_body) {
-                        error!("Unexpected error while sending success: {err}");
-                    } else {
-                        info!("Successfully sent success!");
-                    }
-                }
-
-                Ok(SubmitJobResultsBody::Error(error_body)) => {
-                    let span = span!(
-                        Level::INFO,
-                        "Job",
-                        name = error_body.name,
-                        version = error_body.version
-                    );
-                    let _enter = span.enter();
-
-                    trace!("Received error body, sending upstream...");
-                    trace!("Error body: {error_body}");
-                    if let Err(err) = client.send_error(&error_body) {
-                        error!("Unexpected error while sending error: {err}");
-                    } else {
-                        info!("Successfully sent error!");
-                    }
-                }
-
-                Err(_) => error!("No more transmitters!"),
-            }
-        }
-    });
 
     loop {
         info!("Fetching {} bulk jobs...", APP_CONFIG.bulk_size);
@@ -161,8 +113,7 @@ fn main() -> Result<(), DragonflyError> {
 
                     pool.execute({
                         let client = Arc::clone(&client);
-                        let tx = tx.clone();
-                        move || runner(&client, job, &tx)
+                        move || runner(&client, job)
                     });
                 }
 
