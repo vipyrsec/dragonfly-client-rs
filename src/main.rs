@@ -83,8 +83,7 @@ fn main() -> Result<(), DragonflyError> {
         .init();
     let client = Arc::new(DragonflyClient::new()?);
 
-    // We spawn `n_jobs` threads using a threadpool for processing jobs, +1 more thread to send the
-    // results. The main thread will handle requesting the jobs and submitting them to the threadpool.
+    // We spawn `n_jobs` threads using a threadpool for processing jobs
     let n_jobs = APP_CONFIG.threads;
     let pool = ThreadPool::new(n_jobs);
     debug!("Started threadpool with {} workers", n_jobs);
