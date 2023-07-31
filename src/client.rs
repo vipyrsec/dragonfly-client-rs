@@ -31,7 +31,7 @@ pub struct RulesState {
     pub hash: String,
 }
 
-#[allow(clippy::module_name_repetitions)]
+#[warn(clippy::module_name_repetitions)]
 pub struct DragonflyClient {
     pub client: Client,
     pub authentication_state: AuthState,
