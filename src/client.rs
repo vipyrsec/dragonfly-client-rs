@@ -6,12 +6,12 @@ pub use models::*;
 
 use crate::{error::DragonflyError, APP_CONFIG};
 use flate2::read::GzDecoder;
+use parking_lot::{Condvar, Mutex, RwLock};
 use reqwest::{blocking::Client, StatusCode, Url};
 use std::{
     io::{Cursor, Read},
     time::Duration,
 };
-use parking_lot::{Condvar, Mutex, RwLock};
 use tracing::{error, info, trace, warn};
 
 /// Type alias representing a tar archive
@@ -73,10 +73,7 @@ impl DragonflyClient {
         trace!("Acquired lock");
         if *authing {
             trace!("Another thread is authenticating. Waiting for it to finish.");
-            let _guard = self
-                .authentication_state
-                .cvar
-                .wait(&mut authing);
+            self.authentication_state.cvar.wait(&mut authing);
             trace!("Was notified, returning");
             return;
         }
