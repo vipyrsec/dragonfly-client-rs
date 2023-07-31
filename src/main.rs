@@ -5,10 +5,7 @@ mod exts;
 mod scanner;
 mod utils;
 
-use std::{
-    sync::Arc,
-    time::Duration,
-};
+use std::{sync::Arc, time::Duration};
 
 use client::DragonflyClient;
 use error::DragonflyError;
@@ -52,7 +49,12 @@ fn runner(client: &DragonflyClient, job: Job) {
     let _enter = span.enter();
     let rules_state = client.rules_state.read();
 
-    let send_result = match scanner(client.get_http_client(), &job, &rules_state.rules, &rules_state.hash) {
+    let send_result = match scanner(
+        client.get_http_client(),
+        &job,
+        &rules_state.rules,
+        &rules_state.hash,
+    ) {
         Ok(package_scan_results) => {
             let body = package_scan_results.build_body();
 
@@ -63,7 +65,7 @@ fn runner(client: &DragonflyClient, job: Job) {
             let body = SubmitJobResultsError {
                 name: job.name,
                 version: job.version,
-                reason: format!("{err}")
+                reason: format!("{err}"),
             };
 
             client.send_error(&body)
