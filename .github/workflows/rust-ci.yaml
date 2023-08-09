@@ -172,7 +172,7 @@ jobs:
       id-token: write
 
     environment:
-      name: github-pages
+      name: docs
       url: ${{ steps.deployment.outputs.page_url }}
 
     runs-on: ubuntu-22.04
