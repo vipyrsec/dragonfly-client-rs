@@ -136,4 +136,4 @@ jobs:
       pages: write
       id-token: write
 
-    uses: darbiadev/.github/.github/workflows/github-pages-rust-doc.yaml@f41fb3a79eebcf5a55dd1b85b9c86965d9128db9 # v1.1.0
+    uses: darbiadev/.github/.github/workflows/github-pages-rust-doc.yaml@5f704c2b5aa4a48d52e37e40ba540b15620e45b5 # v1.1.2
