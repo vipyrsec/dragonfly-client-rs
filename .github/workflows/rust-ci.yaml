@@ -128,3 +128,12 @@ jobs:
           YARA_INCLUDE_DIR: ${{ github.workspace }}/.yara/${{ needs.yara-test.outputs.include-dir }}
           YARA_LIBRARY_PATH: ${{ github.workspace }}/.yara/${{ needs.yara-test.outputs.library-path }}
         run: cargo test --no-fail-fast
+
+  docs:
+    # Sets permissions of the GITHUB_TOKEN to allow deployment to GitHub Pages
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+
+    uses: darbiadev/.github/.github/workflows/github-pages-rust-doc.yaml@f41fb3a79eebcf5a55dd1b85b9c86965d9128db9 # v1.1.0
