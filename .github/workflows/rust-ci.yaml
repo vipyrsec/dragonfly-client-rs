@@ -137,6 +137,11 @@ jobs:
       - name: "Checkout repository"
         uses: actions/checkout@c85c95e3d7251135ab7dc9ce3241c5835cc595a9 # v3.5.3
 
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@dd05243424bd5c0e585e4b55eb2d7615cdd32f1f # v2.5.1
+        with:
+          key: x86_64-unknown-linux-gnu
+
       - name: Download YARA
         uses: actions/download-artifact@9bc31d5ccc31df68ecc42ccf4149144866c47d8a # v3.0.2
         with:
@@ -149,11 +154,6 @@ jobs:
           RUST_BACKTRACE: full
           YARA_INCLUDE_DIR: ${{ github.workspace }}/.yara/${{ needs.yara-test.outputs.include-dir }}
           YARA_LIBRARY_PATH: ${{ github.workspace }}/.yara/${{ needs.yara-test.outputs.library-path }}
-
-      - name: Cache dependencies
-        uses: Swatinem/rust-cache@dd05243424bd5c0e585e4b55eb2d7615cdd32f1f # v2.5.1
-        with:
-          key: x86_64-unknown-linux-gnu
 
       - name: "Upload artifact"
         uses: actions/upload-pages-artifact@a753861a5debcf57bf8b404356158c8e1e33150c # v2.0.0
