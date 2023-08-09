@@ -130,7 +130,7 @@ jobs:
         run: cargo test --no-fail-fast
 
   docs-build:
-    needs: [yara-test, yara-test-output]
+    needs: [yara]
     runs-on: ubuntu-latest
 
     steps:
@@ -140,7 +140,7 @@ jobs:
       - name: Download YARA
         uses: actions/download-artifact@9bc31d5ccc31df68ecc42ccf4149144866c47d8a # v3.0.2
         with:
-          name: x86_64-unknown-linux-gnu
+          name: ${{ needs.yara.outputs.artifacts }}
           path: .yara
 
       - name: "Build docs with cargo"
