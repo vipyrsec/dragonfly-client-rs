@@ -154,6 +154,11 @@ jobs:
           YARA_INCLUDE_DIR: ${{ github.workspace }}/.yara/${{ needs.yara.outputs.include-dir }}
           YARA_LIBRARY_PATH: ${{ github.workspace }}/.yara/${{ needs.yara.outputs.library-path }}
 
+      # `.lock` is set to to rw-------, which causes actions/deploy-pages to fail 
+      # because it's expecting all files to be at least rw-r--r--
+      - name: "Remove '.lock' file"
+        run: rm ./target/doc/.lock
+
       - name: "Upload artifact"
         uses: actions/upload-pages-artifact@a753861a5debcf57bf8b404356158c8e1e33150c # v2.0.0
         with:
@@ -171,7 +176,7 @@ jobs:
       id-token: write
 
     environment:
-      name: docs
+      name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
 
     runs-on: ubuntu-22.04
