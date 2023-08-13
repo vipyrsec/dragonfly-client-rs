@@ -19,6 +19,8 @@ pub struct AppConfig {
     pub username: String,
     pub password: String,
     pub max_scan_size: u64,
+    pub amqp: String,
+    pub prefetch: u16,
 }
 
 impl Default for AppConfig {
@@ -41,6 +43,8 @@ impl Default for AppConfig {
             bulk_size: 20,
             load_duration: 60,
             max_scan_size: 1.28e+8 as u64, // 128 MB
+            amqp: String::from("amqp://127.0.0.1:5672/%2f"),
+            prefetch: available_parallelism as u16,
         }
     }
 }
