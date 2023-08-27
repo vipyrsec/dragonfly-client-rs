@@ -48,14 +48,6 @@ fn runner(client: &DragonflyClient, job: Job) {
     let span = span!(Level::INFO, "Job", name = job.name, version = job.version);
     let _enter = span.enter();
     let rules_state = client.rules_state.read();
-<<<<<<< HEAD
-
-=======
-<<<<<<< HEAD
-=======
-
->>>>>>> d159c8f (Remove SubmitJobResultsBody enum)
->>>>>>> ca58768 (Remove SubmitJobResultsBody enum)
     let send_result = match scanner(
         client.get_http_client(),
         &job,
