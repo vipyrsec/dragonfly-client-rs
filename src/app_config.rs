@@ -9,7 +9,6 @@ use serde::{Deserialize, Serialize};
 pub struct AppConfig {
     pub base_url: String,
     pub threads: usize,
-    pub wait_duration: u64,
     pub load_duration: u64,
     pub bulk_size: usize,
     pub auth0_domain: String,
@@ -41,7 +40,6 @@ impl Default for AppConfig {
             threads: available_parallelism,
             bulk_size: 20,
             load_duration: 60,
-            wait_duration: 10,
             max_scan_size: 1.28e+8 as u64, // 128 MB
         }
     }
