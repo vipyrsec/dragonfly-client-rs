@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout repository
-        uses: actions/checkout@c85c95e3d7251135ab7dc9ce3241c5835cc595a9 # v3.5.3
+        uses: actions/checkout@3df4ab11eba7bda6032a0b82a6bb43b11571feac # v4.0.0
 
       - name: Setup Rust
         run: |
@@ -39,7 +39,7 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout repository
-        uses: actions/checkout@c85c95e3d7251135ab7dc9ce3241c5835cc595a9 # v3.5.3
+        uses: actions/checkout@3df4ab11eba7bda6032a0b82a6bb43b11571feac # v4.0.0
 
       - name: Download YARA
         uses: actions/download-artifact@9bc31d5ccc31df68ecc42ccf4149144866c47d8a # v3.0.2
@@ -54,7 +54,7 @@ jobs:
           rustup default stable
 
       - name: Cache dependencies
-        uses: Swatinem/rust-cache@dd05243424bd5c0e585e4b55eb2d7615cdd32f1f # v2.5.1
+        uses: Swatinem/rust-cache@a95ba195448af2da9b00fb742d14ffaaf3c21f43 # v2.7.0
         with:
           key: x86_64-unknown-linux-gnu
 
@@ -103,7 +103,7 @@ jobs:
     runs-on: ${{ matrix.triple.runs-on }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@c85c95e3d7251135ab7dc9ce3241c5835cc595a9 # v3.5.3
+        uses: actions/checkout@3df4ab11eba7bda6032a0b82a6bb43b11571feac # v4.0.0
 
       - name: Download YARA
         uses: actions/download-artifact@9bc31d5ccc31df68ecc42ccf4149144866c47d8a # v3.0.2
@@ -118,7 +118,7 @@ jobs:
           rustup default stable
 
       - name: Cache dependencies
-        uses: Swatinem/rust-cache@dd05243424bd5c0e585e4b55eb2d7615cdd32f1f # v2.5.1
+        uses: Swatinem/rust-cache@a95ba195448af2da9b00fb742d14ffaaf3c21f43 # v2.7.0
         with:
           key: ${{ matrix.triple.target }}
 
@@ -135,10 +135,10 @@ jobs:
 
     steps:
       - name: "Checkout repository"
-        uses: actions/checkout@c85c95e3d7251135ab7dc9ce3241c5835cc595a9 # v3.5.3
+        uses: actions/checkout@3df4ab11eba7bda6032a0b82a6bb43b11571feac # v4.0.0
 
       - name: Cache dependencies
-        uses: Swatinem/rust-cache@dd05243424bd5c0e585e4b55eb2d7615cdd32f1f # v2.5.1
+        uses: Swatinem/rust-cache@a95ba195448af2da9b00fb742d14ffaaf3c21f43 # v2.7.0
         with:
           key: x86_64-unknown-linux-gnu
 
@@ -184,4 +184,4 @@ jobs:
     steps:
       - name: "Deploy to GitHub Pages"
         id: deployment
-        uses: actions/deploy-pages@12ab2b16cf43a7a061fe99da74b6f8f11fb77f5b # v2.0.3
+        uses: actions/deploy-pages@9dbe3824824f8a1377b8e298bafde1a50ede43e5 # v2.0.4
