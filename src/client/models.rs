@@ -37,11 +37,6 @@ impl Display for SubmitJobResultsError {
     }
 }
 
-pub enum SubmitJobResultsBody {
-    Success(SubmitJobResultsSuccess),
-    Error(SubmitJobResultsError),
-}
-
 #[derive(Debug, Deserialize)]
 pub struct Job {
     pub hash: String,
