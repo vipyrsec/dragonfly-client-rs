@@ -87,6 +87,24 @@ fn main() -> Result<(), DragonflyError> {
     let pool = ThreadPool::new(n_jobs);
     debug!("Started threadpool with {} workers", n_jobs);
 
+    // Spawning the authentication thread
+    std::thread::spawn({
+        let client = Arc::clone(&client);
+        trace!("Starting access token refresh thread");
+        move || loop {
+            trace!(
+                "Waiting for read lock on authentication state to determine how long to sleep for"
+            );
+            let expires_in = client.authentication_state.read().expires_in - 10;
+            trace!("Got read lock on authentication state");
+            info!("Will reauthenticate in {expires_in} seconds");
+            std::thread::sleep(Duration::from_secs(u64::from(expires_in)));
+
+            info!("Reauthenticating");
+            client.reauthenticate();
+        }
+    });
+
     loop {
         info!("Fetching {} bulk jobs...", APP_CONFIG.bulk_size);
         match client.bulk_get_job(APP_CONFIG.bulk_size) {
