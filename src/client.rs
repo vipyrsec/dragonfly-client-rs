@@ -6,8 +6,8 @@ pub use models::*;
 
 use crate::{error::DragonflyError, APP_CONFIG};
 use flate2::read::GzDecoder;
-use parking_lot::{Condvar, Mutex, RwLock};
-use reqwest::{blocking::Client, StatusCode, Url};
+use parking_lot::RwLock;
+use reqwest::{blocking::Client, Url};
 use std::{
     io::{Cursor, Read},
     time::Duration,
@@ -21,9 +21,8 @@ pub type TarballType = tar::Archive<Cursor<Vec<u8>>>;
 pub type ZipType = zip::ZipArchive<Cursor<Vec<u8>>>;
 
 pub struct AuthState {
-    pub access_token: RwLock<String>,
-    pub authenticating: Mutex<bool>,
-    pub cvar: Condvar,
+    pub access_token: String,
+    pub expires_in: u32,
 }
 
 pub struct RulesState {
@@ -34,7 +33,7 @@ pub struct RulesState {
 #[warn(clippy::module_name_repetitions)]
 pub struct DragonflyClient {
     pub client: Client,
-    pub authentication_state: AuthState,
+    pub authentication_state: RwLock<AuthState>,
     pub rules_state: RwLock<RulesState>,
 }
 
@@ -45,11 +44,10 @@ impl DragonflyClient {
         let auth_response = fetch_access_token(&client)?;
         let rules_response = fetch_rules(&client, &auth_response.access_token)?;
 
-        let auth_state = AuthState {
-            access_token: RwLock::new(auth_response.access_token),
-            authenticating: Mutex::new(false),
-            cvar: Condvar::new(),
-        };
+        let authentication_state = RwLock::new(AuthState {
+            access_token: auth_response.access_token,
+            expires_in: auth_response.expires_in,
+        });
 
         let rules_state = RwLock::new(RulesState {
             rules: rules_response.compile()?,
@@ -58,7 +56,7 @@ impl DragonflyClient {
 
         Ok(Self {
             client,
-            authentication_state: auth_state,
+            authentication_state,
             rules_state,
         })
     }
@@ -68,32 +66,18 @@ impl DragonflyClient {
     /// If an error occurs while reauthenticating, the function retries with an exponential backoff
     /// described by the equation `min(10 * 60, 2^(x - 1))` where `x` is the number of failed tries.
     pub fn reauthenticate(&self) {
-        trace!("Trying to lock to check if we're authenticating.");
-        let mut authing = self.authentication_state.authenticating.lock();
+        trace!("Waiting for write lock on authentication state");
+        let mut state = self.authentication_state.write();
         trace!("Acquired lock");
-        if *authing {
-            trace!("Another thread is authenticating. Waiting for it to finish.");
-            self.authentication_state.cvar.wait(&mut authing);
-            trace!("Was notified, returning");
-            return;
-        }
-        trace!("No other thread is authenticating. Trying to reauthenticate.");
-        *authing = true;
-        drop(authing);
-
-        let access_token;
 
         let base = 2_f64;
         let initial_timeout = 1_f64;
         let mut tries = 0;
 
-        loop {
+        let authentication_response = loop {
             let r = fetch_access_token(self.get_http_client());
             match r {
-                Ok(authentication_response) => {
-                    access_token = authentication_response.access_token;
-                    break;
-                }
+                Ok(authentication_response) => break authentication_response,
                 Err(e) => {
                     let sleep_time = if tries < 10 {
                         let t = initial_timeout * base.powf(f64::from(tries));
@@ -108,40 +92,24 @@ impl DragonflyClient {
                     tries += 1;
                 }
             }
-        }
+        };
 
         trace!("Successfully got new access token!");
 
-        *self.authentication_state.access_token.write() = access_token;
-
-        let mut authing = self.authentication_state.authenticating.lock();
-        *authing = false;
-        self.authentication_state.cvar.notify_all();
+        *state = AuthState {
+            access_token: authentication_response.access_token,
+            expires_in: authentication_response.expires_in,
+        };
 
         info!("Successfully reauthenticated.");
     }
 
     /// Update the global ruleset. Waits for a write lock.
     pub fn update_rules(&self) -> Result<(), DragonflyError> {
-        let response = match fetch_rules(
+        let response = fetch_rules(
             self.get_http_client(),
-            &self.authentication_state.access_token.read(),
-        ) {
-            Err(err) if err.status() == Some(StatusCode::UNAUTHORIZED) => {
-                info!("Got 401 UNAUTHORIZED while updating rules");
-                self.reauthenticate();
-                info!("Fetching rules again...");
-                fetch_rules(
-                    self.get_http_client(),
-                    &self.authentication_state.access_token.read(),
-                )
-            }
-
-            Ok(response) => Ok(response),
-
-            Err(err) => Err(err),
-        }?;
-
+            &self.authentication_state.read().access_token,
+        )?;
         let mut rules_state = self.rules_state.write();
         rules_state.rules = response.compile()?;
         rules_state.hash = response.hash;
@@ -150,63 +118,30 @@ impl DragonflyClient {
     }
 
     pub fn bulk_get_job(&self, n_jobs: usize) -> reqwest::Result<Vec<Job>> {
-        let access_token = self.authentication_state.access_token.read();
-        match fetch_bulk_job(self.get_http_client(), &access_token, n_jobs) {
-            Err(err) if err.status() == Some(StatusCode::UNAUTHORIZED) => {
-                drop(access_token); // Drop the read lock
-                info!("Got 401 UNAUTHORIZED while doing a bulk fetch job request");
-                self.reauthenticate();
-                info!("Doing a bulk fetch job again...");
-                fetch_bulk_job(
-                    self.get_http_client(),
-                    &self.authentication_state.access_token.read(),
-                    n_jobs,
-                )
-            }
-
-            other => other,
-        }
+        fetch_bulk_job(
+            self.get_http_client(),
+            &self.authentication_state.read().access_token,
+            n_jobs,
+        )
     }
 
     /// Report an error to the server.
     pub fn send_error(&self, body: &SubmitJobResultsError) -> reqwest::Result<()> {
-        let access_token = self.authentication_state.access_token.read();
-        match send_error(self.get_http_client(), &access_token, body) {
-            Err(http_err) if http_err.status() == Some(StatusCode::UNAUTHORIZED) => {
-                drop(access_token); // Drop the read lock
-                info!("Got 401 UNAUTHORIZED while sending success");
-                self.reauthenticate();
-                info!("Sending error body again...");
-                send_error(
-                    self.get_http_client(),
-                    &self.authentication_state.access_token.read(),
-                    body,
-                )
-            }
-
-            other => other,
-        }
+        send_error(
+            self.get_http_client(),
+            &self.authentication_state.read().access_token,
+            body,
+        )
     }
 
     /// Submit the results of a scan to the server, given the job and the scan results of each
     /// distribution
     pub fn send_success(&self, body: &SubmitJobResultsSuccess) -> reqwest::Result<()> {
-        let access_token = self.authentication_state.access_token.read();
-        match send_success(self.get_http_client(), &access_token, body) {
-            Err(http_err) if http_err.status() == Some(StatusCode::UNAUTHORIZED) => {
-                drop(access_token); // Drop the read lock
-                info!("Got 401 UNAUTHORIZED while sending success");
-                self.reauthenticate();
-                info!("Sending success body again...");
-                send_success(
-                    self.get_http_client(),
-                    &self.authentication_state.access_token.read(),
-                    body,
-                )
-            }
-
-            other => other,
-        }
+        send_success(
+            self.get_http_client(),
+            &self.authentication_state.read().access_token,
+            body,
+        )
     }
 
     /// Return a reference to the underlying HTTP Client
