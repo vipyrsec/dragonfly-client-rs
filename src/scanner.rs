@@ -276,29 +276,56 @@ fn scan_file(
 
 #[cfg(test)]
 mod tests {
-    use std::{path::PathBuf, collections::HashSet};
+    use std::{collections::HashSet, path::PathBuf};
     use yara::Compiler;
 
-    use crate::scanner::{RuleScore, FileScanResult};
-    use super::{DistributionScanResults, PackageScanResults, scan_file};
+    use super::{scan_file, DistributionScanResults, PackageScanResults};
+    use crate::scanner::{FileScanResult, RuleScore};
 
     #[test]
     fn test_file_score() {
         let rules = vec![
-            RuleScore { name: String::from("rule1"), score: 5},
-            RuleScore { name: String::from("rule2"), score: 7},
+            RuleScore {
+                name: String::from("rule1"),
+                score: 5,
+            },
+            RuleScore {
+                name: String::from("rule2"),
+                score: 7,
+            },
         ];
 
-        let file_scan_result = FileScanResult { path: PathBuf::default(), rules };
+        let file_scan_result = FileScanResult {
+            path: PathBuf::default(),
+            rules,
+        };
         assert_eq!(file_scan_result.calculate_score(), 12);
     }
 
     #[test]
     fn test_get_most_malicious_file() {
         let file_scan_results = vec![
-            FileScanResult { path: PathBuf::default(), rules: vec![RuleScore { name: String::from("rule1"), score: 5}] },
-            FileScanResult { path: PathBuf::default(), rules: vec![RuleScore { name: String::from("rule2"), score: 7}] },
-            FileScanResult { path: PathBuf::default(), rules: vec![RuleScore { name: String::from("rule3"), score: 4}] },
+            FileScanResult {
+                path: PathBuf::default(),
+                rules: vec![RuleScore {
+                    name: String::from("rule1"),
+                    score: 5,
+                }],
+            },
+            FileScanResult {
+                path: PathBuf::default(),
+                rules: vec![RuleScore {
+                    name: String::from("rule2"),
+                    score: 7,
+                }],
+            },
+            FileScanResult {
+                path: PathBuf::default(),
+                rules: vec![RuleScore {
+                    name: String::from("rule3"),
+                    score: 4,
+                }],
+            },
         ];
 
         let distribution_scan_results = DistributionScanResults {
@@ -306,27 +333,58 @@ mod tests {
             inspector_url: reqwest::Url::parse("https://example.net").unwrap(),
         };
 
-        assert_eq!(distribution_scan_results.get_most_malicious_file().unwrap().rules[0].name, "rule2")
+        assert_eq!(
+            distribution_scan_results
+                .get_most_malicious_file()
+                .unwrap()
+                .rules[0]
+                .name,
+            "rule2"
+        )
     }
 
     #[test]
     fn test_get_matched_rules() {
         let file_scan_results = vec![
-
-            FileScanResult { path: PathBuf::default(), rules: vec![
-                RuleScore { name: String::from("rule1"), score: 5},
-                RuleScore { name: String::from("rule2"), score: 7},
-            ] },
-
-            FileScanResult { path: PathBuf::default(), rules: vec![
-                RuleScore { name: String::from("rule2"), score: 7},
-                RuleScore { name: String::from("rule3"), score: 9},
-            ] },
-
-            FileScanResult { path: PathBuf::default(), rules: vec![
-                RuleScore { name: String::from("rule3"), score: 9},
-                RuleScore { name: String::from("rule4"), score: 6},
-            ] },
+            FileScanResult {
+                path: PathBuf::default(),
+                rules: vec![
+                    RuleScore {
+                        name: String::from("rule1"),
+                        score: 5,
+                    },
+                    RuleScore {
+                        name: String::from("rule2"),
+                        score: 7,
+                    },
+                ],
+            },
+            FileScanResult {
+                path: PathBuf::default(),
+                rules: vec![
+                    RuleScore {
+                        name: String::from("rule2"),
+                        score: 7,
+                    },
+                    RuleScore {
+                        name: String::from("rule3"),
+                        score: 9,
+                    },
+                ],
+            },
+            FileScanResult {
+                path: PathBuf::default(),
+                rules: vec![
+                    RuleScore {
+                        name: String::from("rule3"),
+                        score: 9,
+                    },
+                    RuleScore {
+                        name: String::from("rule4"),
+                        score: 6,
+                    },
+                ],
+            },
         ];
 
         let distribution_scan_results = DistributionScanResults {
@@ -334,13 +392,29 @@ mod tests {
             inspector_url: reqwest::Url::parse("https://example.net").unwrap(),
         };
 
-        let matched_rules: HashSet<RuleScore> = distribution_scan_results.get_matched_rules().into_iter().cloned().collect();
+        let matched_rules: HashSet<RuleScore> = distribution_scan_results
+            .get_matched_rules()
+            .into_iter()
+            .cloned()
+            .collect();
 
         let expected_rules = HashSet::from([
-            RuleScore { name: String::from("rule1"), score: 5},
-            RuleScore { name: String::from("rule2"), score: 7},
-            RuleScore { name: String::from("rule3"), score: 9},
-            RuleScore { name: String::from("rule4"), score: 6},
+            RuleScore {
+                name: String::from("rule1"),
+                score: 5,
+            },
+            RuleScore {
+                name: String::from("rule2"),
+                score: 7,
+            },
+            RuleScore {
+                name: String::from("rule3"),
+                score: 9,
+            },
+            RuleScore {
+                name: String::from("rule4"),
+                score: 6,
+            },
         ]);
 
         assert_eq!(matched_rules, expected_rules)
@@ -349,21 +423,45 @@ mod tests {
     #[test]
     fn test_get_matched_rule_identifiers() {
         let file_scan_results = vec![
-
-            FileScanResult { path: PathBuf::default(), rules: vec![
-                RuleScore { name: String::from("rule1"), score: 5},
-                RuleScore { name: String::from("rule2"), score: 7},
-            ] },
-
-            FileScanResult { path: PathBuf::default(), rules: vec![
-                RuleScore { name: String::from("rule2"), score: 7},
-                RuleScore { name: String::from("rule3"), score: 9},
-            ] },
-
-            FileScanResult { path: PathBuf::default(), rules: vec![
-                RuleScore { name: String::from("rule3"), score: 9},
-                RuleScore { name: String::from("rule4"), score: 6},
-            ] },
+            FileScanResult {
+                path: PathBuf::default(),
+                rules: vec![
+                    RuleScore {
+                        name: String::from("rule1"),
+                        score: 5,
+                    },
+                    RuleScore {
+                        name: String::from("rule2"),
+                        score: 7,
+                    },
+                ],
+            },
+            FileScanResult {
+                path: PathBuf::default(),
+                rules: vec![
+                    RuleScore {
+                        name: String::from("rule2"),
+                        score: 7,
+                    },
+                    RuleScore {
+                        name: String::from("rule3"),
+                        score: 9,
+                    },
+                ],
+            },
+            FileScanResult {
+                path: PathBuf::default(),
+                rules: vec![
+                    RuleScore {
+                        name: String::from("rule3"),
+                        score: 9,
+                    },
+                    RuleScore {
+                        name: String::from("rule4"),
+                        score: 6,
+                    },
+                ],
+            },
         ];
 
         let distribution_scan_results = DistributionScanResults {
@@ -375,19 +473,29 @@ mod tests {
 
         let expected_rule_identifiers = vec!["rule1", "rule2", "rule3", "rule4"];
 
-        assert_eq!(HashSet::<_>::from_iter(matched_rule_identifiers), HashSet::<_>::from_iter(expected_rule_identifiers))
+        assert_eq!(
+            HashSet::<_>::from_iter(matched_rule_identifiers),
+            HashSet::<_>::from_iter(expected_rule_identifiers)
+        )
     }
 
     #[test]
     fn test_build_package_scan_results_body() {
         let file_scan_results1 = vec![
-            FileScanResult { path: PathBuf::default(), rules: vec![
-                RuleScore { name: String::from("rule1"), score: 5},
-            ] },
-
-            FileScanResult { path: PathBuf::default(), rules: vec![
-                RuleScore { name: String::from("rule2"), score: 7},
-            ] },
+            FileScanResult {
+                path: PathBuf::default(),
+                rules: vec![RuleScore {
+                    name: String::from("rule1"),
+                    score: 5,
+                }],
+            },
+            FileScanResult {
+                path: PathBuf::default(),
+                rules: vec![RuleScore {
+                    name: String::from("rule2"),
+                    score: 7,
+                }],
+            },
         ];
         let distribution_scan_results1 = DistributionScanResults {
             file_scan_results: file_scan_results1,
@@ -395,13 +503,20 @@ mod tests {
         };
 
         let file_scan_results2 = vec![
-            FileScanResult { path: PathBuf::default(), rules: vec![
-                RuleScore { name: String::from("rule3"), score: 2},
-            ] },
-
-            FileScanResult { path: PathBuf::default(), rules: vec![
-                RuleScore { name: String::from("rule4"), score: 9},
-            ] },
+            FileScanResult {
+                path: PathBuf::default(),
+                rules: vec![RuleScore {
+                    name: String::from("rule3"),
+                    score: 2,
+                }],
+            },
+            FileScanResult {
+                path: PathBuf::default(),
+                rules: vec![RuleScore {
+                    name: String::from("rule4"),
+                    score: 9,
+                }],
+            },
         ];
         let distribution_scan_results2 = DistributionScanResults {
             file_scan_results: file_scan_results2,
@@ -417,13 +532,20 @@ mod tests {
 
         let body = package_scan_results.build_body();
 
-        assert_eq!(body.inspector_url, Some(String::from("https://example.net/distrib1.tar.gz")));
+        assert_eq!(
+            body.inspector_url,
+            Some(String::from("https://example.net/distrib1.tar.gz"))
+        );
         assert_eq!(body.score, 12);
         assert_eq!(
-            HashSet::from(["rule1".into(), "rule2".into(), "rule3".into(), "rule4".into()]),
+            HashSet::from([
+                "rule1".into(),
+                "rule2".into(),
+                "rule3".into(),
+                "rule4".into()
+            ]),
             HashSet::from_iter(body.rules_matched)
         );
-
     }
 
     #[test]
@@ -439,17 +561,20 @@ mod tests {
             }
         "#;
 
-        let compiler = Compiler::new()
-            .unwrap()
-            .add_rules_str(rules)
-            .unwrap();
+        let compiler = Compiler::new().unwrap().add_rules_str(rules).unwrap();
 
         let rules = compiler.compile_rules().unwrap();
-        let result = scan_file(&mut "I love Rust!".as_bytes(), &PathBuf::default(), &rules).unwrap();
+        let result =
+            scan_file(&mut "I love Rust!".as_bytes(), &PathBuf::default(), &rules).unwrap();
 
         assert_eq!(result.path, PathBuf::default());
-        assert_eq!(result.rules[0], RuleScore { name: "contains_rust".into(), score: 5 });
+        assert_eq!(
+            result.rules[0],
+            RuleScore {
+                name: "contains_rust".into(),
+                score: 5
+            }
+        );
         assert_eq!(result.calculate_score(), 5);
-
     }
 }
