@@ -29,6 +29,7 @@ use utils::create_inspector_url;
 
 use crate::{app_config::APP_CONFIG, client::Job, scanner::PackageScanResults};
 
+#[tracing::instrument(skip_all, fields(name = job.name, version = job.version))]
 fn runner(client: &DragonflyClient, job: Job) -> Result<PackageScanResults, DragonflyError> {
     let mut distribution_scan_results: Vec<DistributionScanResults> = Vec::new();
     for download_url in &job.distributions {
@@ -72,30 +73,32 @@ fn runner(client: &DragonflyClient, job: Job) -> Result<PackageScanResults, Drag
     })
 }
 
+#[tracing::instrument(skip_all, fields(name, version))]
 async fn handle_delivery(
     client: Arc<DragonflyClient>,
     delivery: &Delivery,
 ) -> Result<(), DragonflyError> {
+    trace!("Parsing delivery for job");
     let job: Job = serde_json::from_slice(&delivery.data)?;
-    let span = info_span!("Job", name = &job.name, version = &job.version);
-    async move {
-        trace!("Spawning blocking scanner job in threadpool");
-        let results = tokio::task::spawn_blocking({
-            let client = Arc::clone(&client);
-            move || runner(&client, job)
-        })
-        .await??;
-        trace!("Scanner job in threadpool finished");
-        trace!("Pushing results onto results queue");
-        client.push_results(&results.build_body()).await?;
-        trace!("Ack'ing original delivery");
-        delivery.ack(BasicAckOptions::default()).await?;
-        info!("Acknowledged delivery");
+    trace!("Successfully parsed delivery");
 
-        Ok(())
-    }
-    .instrument(span)
-    .await
+    tracing::Span::current().record("name", &job.name);
+    tracing::Span::current().record("version", &job.version);
+
+    trace!("Spawning blocking scanner job in threadpool");
+    let results = tokio::task::spawn_blocking({
+        let client = Arc::clone(&client);
+        move || runner(&client, job)
+    })
+    .await??;
+    trace!("Scanner job in threadpool finished");
+    trace!("Pushing results onto results queue");
+    client.push_results(&results.build_body()).await?;
+    trace!("Ack'ing original delivery");
+    delivery.ack(BasicAckOptions::default()).await?;
+    info!("Acknowledged delivery");
+
+    Ok(())
 }
 
 #[tokio::main]
