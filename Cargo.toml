@@ -13,7 +13,7 @@ parking_lot = "0.12.1"
 reqwest = { version = "0.11.20", features = ["blocking", "json", "serde_json", "gzip"] }
 serde = { version = "1.0.188", features = ["derive"] }
 tar = "0.4.40"
-thiserror = "1.0.48"
+thiserror = "1.0.49"
 threadpool = "1.8.1"
 tracing = "0.1.37"
 tracing-subscriber = { version = "0.3.17", features = ["env-filter"] }
