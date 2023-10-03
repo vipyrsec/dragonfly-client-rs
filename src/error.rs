@@ -43,6 +43,27 @@ pub enum DragonflyError {
         source: ConfigError,
     },
 
+    #[error("AMQP Client Error: {source:#?}")]
+    LapinError {
+        #[from]
+        source: lapin::Error,
+    },
+
+    #[error("Unable to join panicked task: {source:#?}")]
+    JoinError {
+        #[from]
+        source: tokio::task::JoinError,
+    },
+
+    #[error("Unable to deserialize JSON: {source:#?}")]
+    SerdeJsonError {
+        #[from]
+        source: serde_json::Error,
+    },
+
+    #[error("Consumer cancelled")]
+    ConsumerCancelled,
+
     #[allow(dead_code)]
     #[error("Download too large: '{0:#?}'")]
     DownloadTooLarge(String),

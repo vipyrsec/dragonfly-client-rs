@@ -4,14 +4,13 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use reqwest::{blocking::Client, Url};
+use reqwest::Url;
 use yara::Rules;
 
 use crate::{
-    client::{fetch_tarball, fetch_zipfile, Job, SubmitJobResultsSuccess, TarballType, ZipType},
+    client::{SubmitJobResultsSuccess, TarballType, ZipType},
     error::DragonflyError,
     exts::RuleExt,
-    utils::create_inspector_url,
 };
 
 #[derive(Debug, Hash, Eq, PartialEq)]
@@ -39,7 +38,7 @@ impl FileScanResult {
 }
 
 /// Scan an archive format using Yara rules.
-trait Scan {
+pub trait Scan {
     fn scan(&mut self, rules: &Rules) -> Result<Vec<FileScanResult>, DragonflyError>;
 }
 
@@ -75,15 +74,23 @@ impl Scan for ZipType {
     }
 }
 
+pub enum DistributionFile {
+    Zip(ZipType),
+    Tar(TarballType),
+}
+
 /// A distribution consisting of an archive and an inspector url.
-struct Distribution {
-    file: Box<dyn Scan>,
-    inspector_url: Url,
+pub struct Distribution {
+    pub file: DistributionFile,
+    pub inspector_url: Url,
 }
 
 impl Distribution {
-    fn scan(&mut self, rules: &Rules) -> Result<DistributionScanResults, DragonflyError> {
-        let results = self.file.scan(rules)?;
+    pub fn scan(&mut self, rules: &Rules) -> Result<DistributionScanResults, DragonflyError> {
+        let results = match &mut self.file {
+            DistributionFile::Zip(zip_archive) => zip_archive.scan(rules),
+            DistributionFile::Tar(tar_archive) => tar_archive.scan(rules),
+        }?;
 
         Ok(DistributionScanResults::new(
             results,
@@ -160,28 +167,14 @@ impl DistributionScanResults {
     }
 }
 
+#[derive(Debug)]
 pub struct PackageScanResults {
     pub name: String,
     pub version: String,
     pub distribution_scan_results: Vec<DistributionScanResults>,
-    pub commit_hash: String,
 }
 
 impl PackageScanResults {
-    pub fn new(
-        name: String,
-        version: String,
-        distribution_scan_results: Vec<DistributionScanResults>,
-        commit_hash: String,
-    ) -> Self {
-        Self {
-            name,
-            version,
-            distribution_scan_results,
-            commit_hash,
-        }
-    }
-
     /// Format the package scan results into something that can be sent over the API
     pub fn build_body(&self) -> SubmitJobResultsSuccess {
         let highest_score_distribution = self
@@ -212,37 +205,8 @@ impl PackageScanResults {
             score,
             inspector_url,
             rules_matched,
-            commit: self.commit_hash.clone(),
         }
     }
-}
-
-/// Scan all the distributions of the given job against the given ruleset
-///
-/// Uses the provided HTTP client to download each distribution.
-pub fn scan_all_distributions(
-    http_client: &Client,
-    rules: &Rules,
-    job: &Job,
-) -> Result<Vec<DistributionScanResults>, DragonflyError> {
-    let mut distribution_scan_results = Vec::with_capacity(job.distributions.len());
-    for distribution in &job.distributions {
-        let download_url: Url = distribution.parse().unwrap();
-        let inspector_url = create_inspector_url(&job.name, &job.version, &download_url);
-
-        let mut dist = Distribution {
-            file: if distribution.ends_with(".tar.gz") {
-                Box::new(fetch_tarball(http_client, &download_url)?)
-            } else {
-                Box::new(fetch_zipfile(http_client, &download_url)?)
-            },
-            inspector_url,
-        };
-        let distribution_scan_result = dist.scan(rules)?;
-        distribution_scan_results.push(distribution_scan_result);
-    }
-
-    Ok(distribution_scan_results)
 }
 
 /// Scan a file given it implements `Read`.
