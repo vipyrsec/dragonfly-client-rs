@@ -78,7 +78,7 @@ fn runner(client: &DragonflyClient, job: Job) {
 
 fn main() -> Result<(), DragonflyError> {
     let default_env_filter = EnvFilter::builder()
-        .parse("warn,dragonfly_client_rs=trace")
+        .parse("warn,dragonfly_client_rs=info")
         .unwrap();
     let env_filter = EnvFilter::try_from_default_env().unwrap_or(default_env_filter);
 
