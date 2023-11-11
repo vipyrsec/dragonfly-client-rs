@@ -77,9 +77,12 @@ fn runner(client: &DragonflyClient, job: Job) {
 }
 
 fn main() -> Result<(), DragonflyError> {
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env())
-        .init();
+    let default_env_filter = EnvFilter::builder()
+        .parse("warn,dragonfly_client_rs=info")
+        .unwrap();
+    let env_filter = EnvFilter::try_from_default_env().unwrap_or(default_env_filter);
+
+    tracing_subscriber::fmt().with_env_filter(env_filter).init();
     let client = Arc::new(DragonflyClient::new()?);
 
     // We spawn `n_jobs` threads using a threadpool for processing jobs
