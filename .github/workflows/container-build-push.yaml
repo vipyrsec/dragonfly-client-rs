@@ -35,10 +35,10 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout repository
-        uses: actions/checkout@8ade135a41bc03ea155e62e844d188df1ea18608  # v4.1.0
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11  # v4.1.1
 
       - name: Install cosign
-        uses: sigstore/cosign-installer@11086d25041f77fe8fe7b9ea4e48e3b9192b8f19  # v3.1.2
+        uses: sigstore/cosign-installer@1fc5bd396d372bee37d608f955b336615edf79c8  # v3.2.0
         with:
           cosign-release: v1.13.1
 
@@ -68,7 +68,7 @@ jobs:
 
       - name: Extract Docker metadata
         id: docker_meta
-        uses: docker/metadata-action@96383f45573cb7f253c731d3b3ab81c87ef81934  # v5.0.0
+        uses: docker/metadata-action@e6428a5c4e294a61438ed7f43155db912025b6b3  # v5.2.0
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
@@ -91,7 +91,7 @@ jobs:
 
       - name: Build and push Docker image
         id: docker_build_push
-        uses: docker/build-push-action@0565240e2d4ab88bba5387d719585280857ece09  # v5.0.0
+        uses: docker/build-push-action@4a13e500e55cf31b7a5d59a38ab2040ab0f42f56  # v5.1.0
         with:
           builder: ${{ steps.buildx.outputs.name }}
           cache-from: type=gha,scope=${{ matrix.platform }}
@@ -160,7 +160,7 @@ jobs:
 
       - name: Extract Docker metadata
         id: docker_meta
-        uses: docker/metadata-action@96383f45573cb7f253c731d3b3ab81c87ef81934  # v5.0.0
+        uses: docker/metadata-action@e6428a5c4e294a61438ed7f43155db912025b6b3  # v5.2.0
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
