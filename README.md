@@ -34,6 +34,10 @@ cargo build --release
 ./target/release/dragonfly-client-rs
 ```
 
+> [!IMPORTANT]
+> When building on an `aarch64`-based distribution of macOS, be sure to build
+> Dragonfly with the following environment variables:
+
 ### Docker
 
 #### Requirements
