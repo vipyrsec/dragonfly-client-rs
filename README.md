@@ -23,8 +23,8 @@ export YARA_LIBRARY_PATH='/path/to/yara/libs'
 ```
 
 > [!IMPORTANT]
-> When building on an arm-based distribution of macOS, be sure to build
-> Dragonfly with the following environment variables:
+> When building on an arm-based distribution of macOS, be sure to specify
+> the following environment variables:
 > | Name              | Example Value                             |
 > |-------------------|-------------------------------------------|
 > | YARA_INCLUDE_DIR  | /opt/homebrew/Cellar/yara/4.3.2_1/include |
