@@ -116,6 +116,7 @@ jobs:
       # data. If you would like to publish transparency data even for private images, pass --force to cosign below.
       # https://github.com/sigstore/cosign
       - name: Sign the published Docker image
+        if: ${{ github.ref == 'refs/heads/main' || startswith(github.event.ref, 'refs/tags/v') }}
         env:
           COSIGN_EXPERIMENTAL: 'true'
         shell: bash
