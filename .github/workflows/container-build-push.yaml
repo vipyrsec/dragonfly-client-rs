@@ -2,10 +2,10 @@
 name: Container Build and Push
 
 on:
-  workflow_dispatch:
   push:
     branches: [main]
     tags: [v*]
+  pull_request:
 
 permissions:
   contents: read
@@ -99,7 +99,7 @@ jobs:
           file: Containerfile
           labels: ${{ steps.docker_meta.outputs.labels }}
           platforms: ${{ matrix.platform }}
-          push: true
+          push: ${{ github.ref == 'refs/heads/main' || startswith(github.event.ref, 'refs/tags/v') }}
           tags: ${{ steps.docker_meta.outputs.tags }}
 
       - name: Extract Docker Build(x|Kit) cache mounts
