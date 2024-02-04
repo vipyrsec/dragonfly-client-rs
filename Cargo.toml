@@ -4,16 +4,16 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-env_logger = "0.10.1"
-figment = { version = "0.10.13", features = ["env", "toml"] }
+env_logger = "0.11.1"
+figment = { version = "0.10.14", features = ["env", "toml"] }
 flate2 = "1.0.28"
 log = "0.4.20"
 once_cell = "1.19.0"
 parking_lot = "0.12.1"
-reqwest = { version = "0.11.23", features = ["blocking", "json", "serde_json", "gzip"] }
-serde = { version = "1.0.193", features = ["derive"] }
+reqwest = { version = "0.11.24", features = ["blocking", "json", "serde_json", "gzip"] }
+serde = { version = "1.0.196", features = ["derive"] }
 tar = "0.4.40"
-thiserror = "1.0.53"
+thiserror = "1.0.56"
 threadpool = "1.8.1"
 tracing = "0.1.40"
 tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
