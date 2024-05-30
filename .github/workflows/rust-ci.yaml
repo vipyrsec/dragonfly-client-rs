@@ -29,9 +29,29 @@ jobs:
   yara:
     needs: lint
 
+    strategy:
+      fail-fast: true
+      matrix:
+        runs-on:
+          - ubuntu-22.04
+
     uses: ./.github/workflows/yara.yaml
     with:
-      runs-on: ubuntu-22.04
+      runs-on: ${{ matrix.runs-on }}
+
+  yara-output:
+    needs: yara
+
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Read Matrix Output
+        id: read
+        uses: cloudposse/github-action-matrix-outputs-read@main
+        with:
+          matrix-step-name: yara
+
+    outputs:
+      result: ${{ steps.read.outputs.result }}
 
   clippy:
     needs: yara
@@ -64,35 +84,8 @@ jobs:
           YARA_LIBRARY_PATH: ${{ github.workspace }}/.yara/${{ needs.yara.outputs.library-path }}
         run: cargo clippy -- -D clippy::all -D clippy::pedantic -D clippy::cargo -A clippy::cargo_common_metadata -A clippy::multiple_crate_versions
 
-  yara-test:
-    needs: clippy
-
-    strategy:
-      fail-fast: true
-      matrix:
-        runs-on:
-          - ubuntu-22.04
-
-    uses: ./.github/workflows/yara.yaml
-    with:
-      runs-on: ${{ matrix.runs-on }}
-
-  yara-test-output:
-    needs: yara-test
-
-    runs-on: ubuntu-22.04
-    steps:
-      - name: Read Matrix Output
-        id: read
-        uses: cloudposse/github-action-matrix-outputs-read@main
-        with:
-          matrix-step-name: yara
-
-    outputs:
-      result: ${{ steps.read.outputs.result }}
-
   test:
-    needs: [yara-test, yara-test-output]
+    needs: [yara, yara-output]
 
     strategy:
       matrix:
@@ -108,7 +101,7 @@ jobs:
       - name: Download YARA
         uses: actions/download-artifact@6b208ae046db98c579e8a3aa621ab581ff575935 # v4.1.1
         with:
-          name: ${{ fromJson(needs.yara-test-output.outputs.result).artifacts[matrix.triple.runs-on] }}
+          name: ${{ fromJson(needs.yara-output.outputs.result).artifacts[matrix.triple.runs-on] }}
           path: .yara
 
       - name: Setup Rust
@@ -125,8 +118,8 @@ jobs:
       - name: Run tests
         env:
           RUST_BACKTRACE: full
-          YARA_INCLUDE_DIR: ${{ github.workspace }}/.yara/${{ needs.yara-test.outputs.include-dir }}
-          YARA_LIBRARY_PATH: ${{ github.workspace }}/.yara/${{ needs.yara-test.outputs.library-path }}
+          YARA_INCLUDE_DIR: ${{ github.workspace }}/.yara/${{ needs.yara.outputs.include-dir }}
+          YARA_LIBRARY_PATH: ${{ github.workspace }}/.yara/${{ needs.yara.outputs.library-path }}
         run: cargo test --no-fail-fast
 
   docs-build:
