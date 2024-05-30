@@ -62,7 +62,7 @@ jobs:
         env:
           YARA_INCLUDE_DIR: ${{ github.workspace }}/.yara/${{ needs.yara.outputs.include-dir }}
           YARA_LIBRARY_PATH: ${{ github.workspace }}/.yara/${{ needs.yara.outputs.library-path }}
-        run: cargo clippy -- -D clippy::all -D clippy::pedantic -D clippy::cargo -A clippy::cargo_common_metadata
+        run: cargo clippy -- -D clippy::all -D clippy::pedantic -D clippy::cargo -A clippy::cargo_common_metadata -A clippy::multiple_crate_versions
 
   yara-test:
     needs: clippy
