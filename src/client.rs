@@ -1,7 +1,7 @@
 mod methods;
 mod models;
 
-use chrono::{DateTime, Utc, TimeDelta};
+use chrono::{DateTime, TimeDelta, Utc};
 pub use methods::*;
 pub use models::*;
 
@@ -46,7 +46,7 @@ impl DragonflyClient {
 
         let authentication_state = AuthState {
             access_token: auth_response.access_token,
-            expires_at: Utc::now() + TimeDelta::seconds(auth_response.expires_in.into())
+            expires_at: Utc::now() + TimeDelta::seconds(auth_response.expires_in.into()),
         };
 
         let rules_state = RulesState {

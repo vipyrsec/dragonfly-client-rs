@@ -22,23 +22,25 @@ fn scan_package(client: &mut DragonflyClient, job: Job) {
     let span = span!(Level::INFO, "Job", name = job.name, version = job.version);
     let _enter = span.enter();
 
-    let http_response = match scan_all_distributions(client.get_http_client(), &client.rules_state.rules, &job) {
-        Ok(results) => {
-            let package_scan_results = PackageScanResults::new(job.name, job.version, results, job.hash);
-            let body = package_scan_results.build_body();
+    let http_response =
+        match scan_all_distributions(client.get_http_client(), &client.rules_state.rules, &job) {
+            Ok(results) => {
+                let package_scan_results =
+                    PackageScanResults::new(job.name, job.version, results, job.hash);
+                let body = package_scan_results.build_body();
 
-            client.send_success(&body)
-        },
-        Err(err) => {
-            let body = SubmitJobResultsError {
-                name: job.name,
-                version: job.version,
-                reason: format!("{err}"),
-            };
+                client.send_success(&body)
+            }
+            Err(err) => {
+                let body = SubmitJobResultsError {
+                    name: job.name,
+                    version: job.version,
+                    reason: format!("{err}"),
+                };
 
-            client.send_error(&body)
-        },
-    };
+                client.send_error(&body)
+            }
+        };
 
     if let Err(err) = http_response {
         error!("Error while sending response to API: {err}");
