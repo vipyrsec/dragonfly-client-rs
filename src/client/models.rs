@@ -73,7 +73,6 @@ impl RulesResponse {
 pub struct AuthResponse {
     pub access_token: String,
     pub expires_in: u32,
-    pub token_type: String,
 }
 
 #[derive(Debug, Serialize)]

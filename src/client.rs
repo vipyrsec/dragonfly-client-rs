@@ -1,12 +1,12 @@
 mod methods;
 mod models;
 
+use chrono::{DateTime, Utc, TimeDelta};
 pub use methods::*;
 pub use models::*;
 
 use crate::{error::DragonflyError, APP_CONFIG};
 use flate2::read::GzDecoder;
-use parking_lot::RwLock;
 use reqwest::{blocking::Client, Url};
 use std::{
     io::{Cursor, Read},
@@ -22,7 +22,7 @@ pub type ZipType = zip::ZipArchive<Cursor<Vec<u8>>>;
 
 pub struct AuthState {
     pub access_token: String,
-    pub expires_in: u32,
+    pub expires_at: DateTime<Utc>,
 }
 
 pub struct RulesState {
@@ -33,8 +33,8 @@ pub struct RulesState {
 #[warn(clippy::module_name_repetitions)]
 pub struct DragonflyClient {
     pub client: Client,
-    pub authentication_state: RwLock<AuthState>,
-    pub rules_state: RwLock<RulesState>,
+    pub authentication_state: AuthState,
+    pub rules_state: RulesState,
 }
 
 impl DragonflyClient {
@@ -44,15 +44,15 @@ impl DragonflyClient {
         let auth_response = fetch_access_token(&client)?;
         let rules_response = fetch_rules(&client, &auth_response.access_token)?;
 
-        let authentication_state = RwLock::new(AuthState {
+        let authentication_state = AuthState {
             access_token: auth_response.access_token,
-            expires_in: auth_response.expires_in,
-        });
+            expires_at: Utc::now() + TimeDelta::seconds(auth_response.expires_in.into())
+        };
 
-        let rules_state = RwLock::new(RulesState {
+        let rules_state = RulesState {
             rules: rules_response.compile()?,
             hash: rules_response.hash,
-        });
+        };
 
         Ok(Self {
             client,
@@ -61,14 +61,15 @@ impl DragonflyClient {
         })
     }
 
-    /// Update the state with a new access token.
+    /// Update the state with a new access token, if it's expired.
     ///
+    /// If the token is not expired, then nothing is done.
     /// If an error occurs while reauthenticating, the function retries with an exponential backoff
     /// described by the equation `min(10 * 60, 2^(x - 1))` where `x` is the number of failed tries.
-    pub fn reauthenticate(&self) {
-        trace!("Waiting for write lock on authentication state");
-        let mut state = self.authentication_state.write();
-        trace!("Acquired lock");
+    pub fn reauthenticate(&mut self) {
+        if !(Utc::now() > self.authentication_state.expires_at) {
+            return;
+        }
 
         let base = 2_f64;
         let initial_timeout = 1_f64;
@@ -96,50 +97,63 @@ impl DragonflyClient {
 
         trace!("Successfully got new access token!");
 
-        *state = AuthState {
+        self.authentication_state = AuthState {
             access_token: authentication_response.access_token,
-            expires_in: authentication_response.expires_in,
+            expires_at: Utc::now() + TimeDelta::seconds(authentication_response.expires_in.into()),
         };
 
         info!("Successfully reauthenticated.");
     }
 
-    /// Update the global ruleset. Waits for a write lock.
-    pub fn update_rules(&self) -> Result<(), DragonflyError> {
+    /// Update the global ruleset.
+    pub fn update_rules(&mut self) -> Result<(), DragonflyError> {
+        self.reauthenticate();
+
         let response = fetch_rules(
             self.get_http_client(),
-            &self.authentication_state.read().access_token,
+            &self.authentication_state.access_token,
         )?;
-        let mut rules_state = self.rules_state.write();
-        rules_state.rules = response.compile()?;
-        rules_state.hash = response.hash;
+        self.rules_state.rules = response.compile()?;
+        self.rules_state.hash = response.hash;
 
         Ok(())
     }
 
-    pub fn bulk_get_job(&self, n_jobs: usize) -> reqwest::Result<Vec<Job>> {
+    pub fn bulk_get_job(&mut self, n_jobs: usize) -> reqwest::Result<Vec<Job>> {
+        self.reauthenticate();
+
         fetch_bulk_job(
             self.get_http_client(),
-            &self.authentication_state.read().access_token,
+            &self.authentication_state.access_token,
             n_jobs,
         )
     }
 
+    pub fn get_job(&mut self) -> reqwest::Result<Option<Job>> {
+        self.reauthenticate();
+
+        self.bulk_get_job(1).map(|jobs| jobs.into_iter().nth(0))
+    }
+
     /// Report an error to the server.
-    pub fn send_error(&self, body: &SubmitJobResultsError) -> reqwest::Result<()> {
+    pub fn send_error(&mut self, body: &SubmitJobResultsError) -> reqwest::Result<()> {
+        self.reauthenticate();
+
         send_error(
             self.get_http_client(),
-            &self.authentication_state.read().access_token,
+            &self.authentication_state.access_token,
             body,
         )
     }
 
     /// Submit the results of a scan to the server, given the job and the scan results of each
     /// distribution
-    pub fn send_success(&self, body: &SubmitJobResultsSuccess) -> reqwest::Result<()> {
+    pub fn send_success(&mut self, body: &SubmitJobResultsSuccess) -> reqwest::Result<()> {
+        self.reauthenticate();
+
         send_success(
             self.get_http_client(),
-            &self.authentication_state.read().access_token,
+            &self.authentication_state.access_token,
             body,
         )
     }
