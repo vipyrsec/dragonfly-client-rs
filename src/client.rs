@@ -132,26 +132,15 @@ impl DragonflyClient {
     pub fn get_job(&mut self) -> reqwest::Result<Option<Job>> {
         self.reauthenticate();
 
+        // not `slice::first` because we want to own the Job
         self.bulk_get_job(1).map(|jobs| jobs.into_iter().nth(0))
     }
 
-    /// Report an error to the server.
-    pub fn send_error(&mut self, body: &SubmitJobResultsError) -> reqwest::Result<()> {
+    /// Send a [`crate::client::models::ScanResult`] to mainframe
+    pub fn send_result(&mut self, body: &models::ScanResult) -> reqwest::Result<()> {
         self.reauthenticate();
 
-        send_error(
-            self.get_http_client(),
-            &self.authentication_state.access_token,
-            body,
-        )
-    }
-
-    /// Submit the results of a scan to the server, given the job and the scan results of each
-    /// distribution
-    pub fn send_success(&mut self, body: &SubmitJobResultsSuccess) -> reqwest::Result<()> {
-        self.reauthenticate();
-
-        send_success(
+        send_result(
             self.get_http_client(),
             &self.authentication_state.access_token,
             body,

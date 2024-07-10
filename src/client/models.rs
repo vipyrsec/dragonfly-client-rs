@@ -6,6 +6,8 @@ use yara::{Compiler, Rules};
 
 use crate::error::DragonflyError;
 
+pub type ScanResult = Result<SubmitJobResultsSuccess, SubmitJobResultsError>;
+
 #[derive(Debug, Serialize, PartialEq)]
 pub struct SubmitJobResultsSuccess {
     pub name: String,

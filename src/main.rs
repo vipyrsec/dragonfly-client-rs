@@ -14,36 +14,27 @@ use tracing_subscriber::EnvFilter;
 
 use crate::{
     app_config::APP_CONFIG,
-    client::{Job, SubmitJobResultsError},
+    client::{Job, ScanResult, SubmitJobResultsError},
     scanner::{scan_all_distributions, PackageScanResults},
 };
 
-fn scan_package(client: &mut DragonflyClient, job: Job) {
+fn scan_package(client: &DragonflyClient, job: Job) -> ScanResult {
     let span = span!(Level::INFO, "Job", name = job.name, version = job.version);
     let _enter = span.enter();
 
-    let http_response =
-        match scan_all_distributions(client.get_http_client(), &client.rules_state.rules, &job) {
-            Ok(results) => {
-                let package_scan_results =
-                    PackageScanResults::new(job.name, job.version, results, job.hash);
-                let body = package_scan_results.build_body();
+    match scan_all_distributions(client.get_http_client(), &client.rules_state.rules, &job) {
+        Ok(results) => {
+            let package_scan_results =
+                PackageScanResults::new(job.name, job.version, results, job.hash);
+            let body = package_scan_results.build_body();
 
-                client.send_success(&body)
-            }
-            Err(err) => {
-                let body = SubmitJobResultsError {
-                    name: job.name,
-                    version: job.version,
-                    reason: format!("{err}"),
-                };
-
-                client.send_error(&body)
-            }
-        };
-
-    if let Err(err) = http_response {
-        error!("Error while sending response to API: {err}");
+            Ok(body)
+        }
+        Err(err) => Err(SubmitJobResultsError {
+            name: job.name,
+            version: job.version,
+            reason: format!("{err}"),
+        }),
     }
 }
 
@@ -74,7 +65,11 @@ fn main() -> Result<(), DragonflyError> {
                     }
                 }
 
-                scan_package(&mut client, job);
+                let scan_result = scan_package(&client, job);
+                let http_result = client.send_result(&scan_result);
+                if let Err(err) = http_result {
+                    error!("Error while sending response to API: {err}");
+                }
             }
 
             Ok(None) => info!("No job found"),
