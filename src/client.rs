@@ -67,7 +67,7 @@ impl DragonflyClient {
     /// If an error occurs while reauthenticating, the function retries with an exponential backoff
     /// described by the equation `min(10 * 60, 2^(x - 1))` where `x` is the number of failed tries.
     pub fn reauthenticate(&mut self) {
-        if !(Utc::now() > self.authentication_state.expires_at) {
+        if Utc::now() <= self.authentication_state.expires_at {
             return;
         }
 
