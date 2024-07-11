@@ -1,10 +1,9 @@
+use color_eyre::Result;
 use serde::Serialize;
 use serde::{self, Deserialize};
 use std::collections::HashMap;
 use std::fmt::Display;
 use yara::{Compiler, Rules};
-
-use crate::error::DragonflyError;
 
 #[derive(Debug, Serialize, PartialEq)]
 pub struct SubmitJobResultsSuccess {
@@ -53,7 +52,7 @@ pub struct RulesResponse {
 
 impl RulesResponse {
     /// Compile the rules from the response
-    pub fn compile(&self) -> Result<Rules, DragonflyError> {
+    pub fn compile(&self) -> Result<Rules> {
         let rules_str = self
             .rules
             .values()

@@ -4,7 +4,8 @@ mod models;
 pub use methods::*;
 pub use models::*;
 
-use crate::{error::DragonflyError, APP_CONFIG};
+use crate::APP_CONFIG;
+use color_eyre::Result;
 use flate2::read::GzDecoder;
 use parking_lot::RwLock;
 use reqwest::{blocking::Client, Url};
@@ -38,7 +39,7 @@ pub struct DragonflyClient {
 }
 
 impl DragonflyClient {
-    pub fn new() -> Result<Self, DragonflyError> {
+    pub fn new() -> Result<Self> {
         let client = Client::builder().gzip(true).build()?;
 
         let auth_response = fetch_access_token(&client)?;
@@ -105,7 +106,7 @@ impl DragonflyClient {
     }
 
     /// Update the global ruleset. Waits for a write lock.
-    pub fn update_rules(&self) -> Result<(), DragonflyError> {
+    pub fn update_rules(&self) -> Result<()> {
         let response = fetch_rules(
             self.get_http_client(),
             &self.authentication_state.read().access_token,
@@ -150,10 +151,7 @@ impl DragonflyClient {
     }
 }
 
-pub fn fetch_tarball(
-    http_client: &Client,
-    download_url: &Url,
-) -> Result<TarballType, DragonflyError> {
+pub fn fetch_tarball(http_client: &Client, download_url: &Url) -> Result<TarballType> {
     let response = http_client.get(download_url.clone()).send()?;
 
     let decompressed = GzDecoder::new(response);
@@ -165,7 +163,7 @@ pub fn fetch_tarball(
     Ok(tar::Archive::new(cursor))
 }
 
-pub fn fetch_zipfile(http_client: &Client, download_url: &Url) -> Result<ZipType, DragonflyError> {
+pub fn fetch_zipfile(http_client: &Client, download_url: &Url) -> Result<ZipType> {
     let response = http_client.get(download_url.to_string()).send()?;
 
     let mut cursor = Cursor::new(Vec::new());

@@ -1,6 +1,5 @@
 mod app_config;
 mod client;
-mod error;
 mod exts;
 mod scanner;
 mod utils;
@@ -8,7 +7,7 @@ mod utils;
 use std::{sync::Arc, time::Duration};
 
 use client::DragonflyClient;
-use error::DragonflyError;
+use color_eyre::eyre::Result;
 use reqwest::blocking::Client;
 use threadpool::ThreadPool;
 use tracing::{debug, error, info, span, trace, Level};
@@ -30,7 +29,7 @@ fn scanner(
     job: &Job,
     rules: &Rules,
     commit_hash: &str,
-) -> Result<PackageScanResults, DragonflyError> {
+) -> Result<PackageScanResults> {
     let distribution_scan_results = scan_all_distributions(http_client, rules, job)?;
 
     let package_scan_result = PackageScanResults::new(
@@ -76,7 +75,9 @@ fn runner(client: &DragonflyClient, job: Job) {
     }
 }
 
-fn main() -> Result<(), DragonflyError> {
+fn main() -> Result<()> {
+    color_eyre::install()?;
+
     let default_env_filter = EnvFilter::builder()
         .parse("warn,dragonfly_client_rs=info")
         .unwrap();
