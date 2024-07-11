@@ -7,16 +7,16 @@ use zip::result::ZipError;
 #[allow(clippy::module_name_repetitions)]
 #[derive(Error, Debug)]
 pub enum DragonflyError {
-    #[error("Yara Error: {source:#?}")]
+    #[error("Yara X Error: {source:#?}")]
     YaraError {
         #[from]
-        source: yara::YaraError,
+        source: yara_x::Error,
     },
 
-    #[error("Yara Error: {source:#?}")]
-    GenericYaraError {
+    #[error("Yara X Scan Error: {source:#?}")]
+    ScanError {
         #[from]
-        source: yara::Error,
+        source: yara_x::ScanError,
     },
 
     #[error("HTTP Error: {source:#?}")]

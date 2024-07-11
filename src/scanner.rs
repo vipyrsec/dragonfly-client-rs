@@ -5,7 +5,7 @@ use std::{
 };
 
 use reqwest::{blocking::Client, Url};
-use yara::Rules;
+use yara_x::Rules;
 
 use crate::{
     client::{fetch_tarball, fetch_zipfile, Job, SubmitJobResultsSuccess, TarballType, ZipType},
@@ -253,14 +253,16 @@ pub fn scan_all_distributions(
 fn scan_file(
     file: &mut impl Read,
     path: &Path,
-    rules: &Rules,
+    rules: &yara_x::Rules,
 ) -> Result<FileScanResult, DragonflyError> {
     let mut buffer = Vec::new();
     file.read_to_end(&mut buffer)?;
 
-    let rules = rules
-        .scan_mem(&buffer, 10)?
-        .into_iter()
+    let mut scanner = yara_x::Scanner::new(rules);
+
+    let rules = scanner
+        .scan(buffer.as_slice())?
+        .matching_rules()
         .filter(|rule| {
             let filetypes = rule.get_filetypes();
             filetypes.is_empty()
@@ -277,7 +279,7 @@ fn scan_file(
 #[cfg(test)]
 mod tests {
     use std::{collections::HashSet, path::PathBuf};
-    use yara::Compiler;
+    use yara_x::Compiler;
 
     use super::{scan_file, DistributionScanResults, PackageScanResults};
     use crate::scanner::{FileScanResult, RuleScore};
@@ -561,9 +563,10 @@ mod tests {
             }
         "#;
 
-        let compiler = Compiler::new().unwrap().add_rules_str(rules).unwrap();
+        let mut compiler = Compiler::new();
+        compiler.add_source(rules).unwrap();
+        let rules = compiler.build();
 
-        let rules = compiler.compile_rules().unwrap();
         let result =
             scan_file(&mut "I love Rust!".as_bytes(), &PathBuf::default(), &rules).unwrap();
 

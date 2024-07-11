@@ -2,7 +2,6 @@ use serde::Serialize;
 use serde::{self, Deserialize};
 use std::collections::HashMap;
 use std::fmt::Display;
-use yara::{Compiler, Rules};
 
 use crate::error::DragonflyError;
 
@@ -55,7 +54,7 @@ pub struct RulesResponse {
 
 impl RulesResponse {
     /// Compile the rules from the response
-    pub fn compile(&self) -> Result<Rules, DragonflyError> {
+    pub fn compile(&self) -> Result<yara_x::Rules, DragonflyError> {
         let rules_str = self
             .rules
             .values()
@@ -63,11 +62,12 @@ impl RulesResponse {
             .collect::<Vec<&str>>()
             .join("\n");
 
-        let compiled_rules = Compiler::new()?
-            .add_rules_str(&rules_str)?
-            .compile_rules()?;
+        let mut compiler = yara_x::Compiler::new();
+        compiler.add_source(rules_str.as_str())?;
 
-        Ok(compiled_rules)
+        let rules = compiler.build();
+
+        Ok(rules)
     }
 }
 
