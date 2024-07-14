@@ -4,12 +4,12 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use color_eyre::Result;
 use reqwest::{blocking::Client, Url};
 use yara_x::Rules;
 
 use crate::{
     client::{fetch_tarball, fetch_zipfile, Job, SubmitJobResultsSuccess, TarballType, ZipType},
-    error::DragonflyError,
     exts::RuleExt,
     utils::create_inspector_url,
 };
@@ -40,12 +40,12 @@ impl FileScanResult {
 
 /// Scan an archive format using Yara rules.
 trait Scan {
-    fn scan(&mut self, rules: &Rules) -> Result<Vec<FileScanResult>, DragonflyError>;
+    fn scan(&mut self, rules: &Rules) -> Result<Vec<FileScanResult>>;
 }
 
 impl Scan for TarballType {
     /// Scan a tarball against the given rule set
-    fn scan(&mut self, rules: &Rules) -> Result<Vec<FileScanResult>, DragonflyError> {
+    fn scan(&mut self, rules: &Rules) -> Result<Vec<FileScanResult>> {
         let file_scan_results = self
             .entries()?
             .filter_map(Result::ok)
@@ -62,7 +62,7 @@ impl Scan for TarballType {
 
 impl Scan for ZipType {
     /// Scan a zipfile against the given rule set
-    fn scan(&mut self, rules: &Rules) -> Result<Vec<FileScanResult>, DragonflyError> {
+    fn scan(&mut self, rules: &Rules) -> Result<Vec<FileScanResult>> {
         let mut file_scan_results = Vec::new();
         for idx in 0..self.len() {
             let mut file = self.by_index(idx)?;
@@ -82,7 +82,7 @@ struct Distribution {
 }
 
 impl Distribution {
-    fn scan(&mut self, rules: &Rules) -> Result<DistributionScanResults, DragonflyError> {
+    fn scan(&mut self, rules: &Rules) -> Result<DistributionScanResults> {
         let results = self.file.scan(rules)?;
 
         Ok(DistributionScanResults::new(
@@ -224,7 +224,7 @@ pub fn scan_all_distributions(
     http_client: &Client,
     rules: &Rules,
     job: &Job,
-) -> Result<Vec<DistributionScanResults>, DragonflyError> {
+) -> Result<Vec<DistributionScanResults>> {
     let mut distribution_scan_results = Vec::with_capacity(job.distributions.len());
     for distribution in &job.distributions {
         let download_url: Url = distribution.parse().unwrap();
@@ -250,11 +250,7 @@ pub fn scan_all_distributions(
 /// # Arguments
 /// * `path` - The path corresponding to this file
 /// * `rules` - The compiled rule set to scan this file against
-fn scan_file(
-    file: &mut impl Read,
-    path: &Path,
-    rules: &yara_x::Rules,
-) -> Result<FileScanResult, DragonflyError> {
+fn scan_file(file: &mut impl Read, path: &Path, rules: &yara_x::Rules) -> Result<FileScanResult> {
     let mut buffer = Vec::new();
     file.read_to_end(&mut buffer)?;
 

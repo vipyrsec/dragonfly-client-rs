@@ -1,6 +1,5 @@
 mod app_config;
 mod client;
-mod error;
 mod exts;
 mod scanner;
 mod utils;
@@ -8,7 +7,7 @@ mod utils;
 use std::time::Duration;
 
 use client::DragonflyClient;
-use error::DragonflyError;
+use color_eyre::eyre::Result;
 use tracing::{error, info, span, trace, Level};
 use tracing_subscriber::EnvFilter;
 
@@ -38,7 +37,9 @@ fn scan_package(client: &DragonflyClient, job: Job) -> ScanResult {
     }
 }
 
-fn main() -> Result<(), DragonflyError> {
+fn main() -> Result<()> {
+    color_eyre::install()?;
+
     let default_env_filter = EnvFilter::builder()
         .parse("warn,dragonfly_client_rs=info")
         .unwrap();
