@@ -1,6 +1,5 @@
 mod app_config;
 mod client;
-mod error;
 mod exts;
 mod scanner;
 mod utils;
@@ -8,7 +7,7 @@ mod utils;
 use std::time::Duration;
 
 use client::DragonflyClient;
-use error::DragonflyError;
+use color_eyre::eyre::Result;
 use tracing::{error, info, span, trace, Level};
 use tracing_subscriber::EnvFilter;
 
@@ -38,7 +37,9 @@ fn scan_package(client: &DragonflyClient, job: Job) -> ScanResult {
     }
 }
 
-fn main() -> Result<(), DragonflyError> {
+fn main() -> Result<()> {
+    color_eyre::install()?;
+
     let default_env_filter = EnvFilter::builder()
         .parse("warn,dragonfly_client_rs=info")
         .unwrap();
@@ -66,17 +67,21 @@ fn main() -> Result<(), DragonflyError> {
                 }
 
                 let scan_result = scan_package(&client, job);
-                let http_result = client.send_result(&scan_result);
+                let http_result = client.send_result(scan_result);
                 if let Err(err) = http_result {
                     error!("Error while sending response to API: {err}");
                 }
             }
 
-            Ok(None) => info!("No job found"),
+            Ok(None) => {
+                info!("No job found");
+                std::thread::sleep(Duration::from_secs(APP_CONFIG.load_duration));
+            }
 
-            Err(err) => error!("Unexpected HTTP error: {err}"),
+            Err(err) => {
+                error!("Unexpected HTTP error: {err}");
+                std::thread::sleep(Duration::from_secs(APP_CONFIG.load_duration));
+            }
         }
-
-        std::thread::sleep(Duration::from_secs(APP_CONFIG.load_duration));
     }
 }

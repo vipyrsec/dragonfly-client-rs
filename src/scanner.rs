@@ -4,12 +4,12 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use color_eyre::Result;
 use reqwest::{blocking::Client, Url};
 use yara_x::Rules;
 
 use crate::{
     client::{fetch_tarball, fetch_zipfile, Job, SubmitJobResultsSuccess, TarballType, ZipType},
-    error::DragonflyError,
     exts::RuleExt,
     utils::create_inspector_url,
 };
@@ -40,12 +40,12 @@ impl FileScanResult {
 
 /// Scan an archive format using Yara rules.
 trait Scan {
-    fn scan(&mut self, rules: &Rules) -> Result<Vec<FileScanResult>, DragonflyError>;
+    fn scan(&mut self, rules: &Rules) -> Result<Vec<FileScanResult>>;
 }
 
 impl Scan for TarballType {
     /// Scan a tarball against the given rule set
-    fn scan(&mut self, rules: &Rules) -> Result<Vec<FileScanResult>, DragonflyError> {
+    fn scan(&mut self, rules: &Rules) -> Result<Vec<FileScanResult>> {
         let file_scan_results = self
             .entries()?
             .filter_map(Result::ok)
@@ -62,7 +62,7 @@ impl Scan for TarballType {
 
 impl Scan for ZipType {
     /// Scan a zipfile against the given rule set
-    fn scan(&mut self, rules: &Rules) -> Result<Vec<FileScanResult>, DragonflyError> {
+    fn scan(&mut self, rules: &Rules) -> Result<Vec<FileScanResult>> {
         let mut file_scan_results = Vec::new();
         for idx in 0..self.len() {
             let mut file = self.by_index(idx)?;
@@ -82,7 +82,7 @@ struct Distribution {
 }
 
 impl Distribution {
-    fn scan(&mut self, rules: &Rules) -> Result<DistributionScanResults, DragonflyError> {
+    fn scan(&mut self, rules: &Rules) -> Result<DistributionScanResults> {
         let results = self.file.scan(rules)?;
 
         Ok(DistributionScanResults::new(
@@ -224,7 +224,7 @@ pub fn scan_all_distributions(
     http_client: &Client,
     rules: &Rules,
     job: &Job,
-) -> Result<Vec<DistributionScanResults>, DragonflyError> {
+) -> Result<Vec<DistributionScanResults>> {
     let mut distribution_scan_results = Vec::with_capacity(job.distributions.len());
     for distribution in &job.distributions {
         let download_url: Url = distribution.parse().unwrap();
@@ -250,11 +250,7 @@ pub fn scan_all_distributions(
 /// # Arguments
 /// * `path` - The path corresponding to this file
 /// * `rules` - The compiled rule set to scan this file against
-fn scan_file(
-    file: &mut impl Read,
-    path: &Path,
-    rules: &yara_x::Rules,
-) -> Result<FileScanResult, DragonflyError> {
+fn scan_file(file: &mut impl Read, path: &Path, rules: &yara_x::Rules) -> Result<FileScanResult> {
     let mut buffer = Vec::new();
     file.read_to_end(&mut buffer)?;
 
@@ -282,7 +278,43 @@ mod tests {
     use yara_x::Compiler;
 
     use super::{scan_file, DistributionScanResults, PackageScanResults};
-    use crate::scanner::{FileScanResult, RuleScore};
+    use crate::{
+        client::{ScanResultSerializer, SubmitJobResultsError, SubmitJobResultsSuccess},
+        scanner::{FileScanResult, RuleScore},
+    };
+
+    #[test]
+    fn test_scan_result_success_serialization() {
+        let success = SubmitJobResultsSuccess {
+            name: "test".into(),
+            version: "1.0.0".into(),
+            score: 10,
+            inspector_url: Some("inspector url".into()),
+            rules_matched: vec!["abc".into(), "def".into()],
+            commit: "commit hash".into(),
+        };
+
+        let scan_result: ScanResultSerializer = Ok(success).into();
+        let actual = serde_json::to_string(&scan_result).unwrap();
+        let expected = r#"{"name":"test","version":"1.0.0","score":10,"inspector_url":"inspector url","rules_matched":["abc","def"],"commit":"commit hash"}"#;
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn test_scan_result_error_serialization() {
+        let error = SubmitJobResultsError {
+            name: "test".into(),
+            version: "1.0.0".into(),
+            reason: "Package too large".into(),
+        };
+
+        let scan_result: ScanResultSerializer = Err(error).into();
+        let actual = serde_json::to_string(&scan_result).unwrap();
+        let expected = r#"{"name":"test","version":"1.0.0","reason":"Package too large"}"#;
+
+        assert_eq!(actual, expected);
+    }
 
     #[test]
     fn test_file_score() {

@@ -5,7 +5,8 @@ use chrono::{DateTime, TimeDelta, Utc};
 pub use methods::*;
 pub use models::*;
 
-use crate::{error::DragonflyError, APP_CONFIG};
+use crate::APP_CONFIG;
+use color_eyre::Result;
 use flate2::read::GzDecoder;
 use reqwest::{blocking::Client, Url};
 use std::{
@@ -38,7 +39,7 @@ pub struct DragonflyClient {
 }
 
 impl DragonflyClient {
-    pub fn new() -> Result<Self, DragonflyError> {
+    pub fn new() -> Result<Self> {
         let client = Client::builder().gzip(true).build()?;
 
         let auth_response = fetch_access_token(&client)?;
@@ -105,8 +106,8 @@ impl DragonflyClient {
         info!("Successfully reauthenticated.");
     }
 
-    /// Update the global ruleset.
-    pub fn update_rules(&mut self) -> Result<(), DragonflyError> {
+    /// Update the global ruleset. Waits for a write lock.
+    pub fn update_rules(&mut self) -> Result<()> {
         self.reauthenticate();
 
         let response = fetch_rules(
@@ -137,7 +138,7 @@ impl DragonflyClient {
     }
 
     /// Send a [`crate::client::models::ScanResult`] to mainframe
-    pub fn send_result(&mut self, body: &models::ScanResult) -> reqwest::Result<()> {
+    pub fn send_result(&mut self, body: models::ScanResult) -> reqwest::Result<()> {
         self.reauthenticate();
 
         send_result(
@@ -153,10 +154,7 @@ impl DragonflyClient {
     }
 }
 
-pub fn fetch_tarball(
-    http_client: &Client,
-    download_url: &Url,
-) -> Result<TarballType, DragonflyError> {
+pub fn fetch_tarball(http_client: &Client, download_url: &Url) -> Result<TarballType> {
     let response = http_client.get(download_url.clone()).send()?;
 
     let decompressed = GzDecoder::new(response);
@@ -168,7 +166,7 @@ pub fn fetch_tarball(
     Ok(tar::Archive::new(cursor))
 }
 
-pub fn fetch_zipfile(http_client: &Client, download_url: &Url) -> Result<ZipType, DragonflyError> {
+pub fn fetch_zipfile(http_client: &Client, download_url: &Url) -> Result<ZipType> {
     let response = http_client.get(download_url.to_string()).send()?;
 
     let mut cursor = Cursor::new(Vec::new());
