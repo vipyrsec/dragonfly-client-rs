@@ -1,3 +1,4 @@
+---
 name: Rust CI
 
 on:
@@ -10,12 +11,16 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
+defaults:
+  run:
+    shell: bash
+
 jobs:
   lint:
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout repository
-        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11  # v4.1.1
 
       - name: Setup Rust
         run: |
@@ -26,46 +31,13 @@ jobs:
       - name: Run Clippy
         run: cargo fmt --all --check
 
-  yara:
-    needs: lint
-
-    strategy:
-      fail-fast: true
-      matrix:
-        runs-on:
-          - ubuntu-22.04
-
-    uses: ./.github/workflows/yara.yaml
-    with:
-      runs-on: ${{ matrix.runs-on }}
-
-  yara-output:
-    needs: yara
-
-    runs-on: ubuntu-22.04
-    steps:
-      - name: Read Matrix Output
-        id: read
-        uses: cloudposse/github-action-matrix-outputs-read@main
-        with:
-          matrix-step-name: yara
-
-    outputs:
-      result: ${{ steps.read.outputs.result }}
-
   clippy:
-    needs: yara
+    needs: lint
 
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout repository
-        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
-
-      - name: Download YARA
-        uses: actions/download-artifact@6b208ae046db98c579e8a3aa621ab581ff575935 # v4.1.1
-        with:
-          name: ${{ needs.yara.outputs.artifacts }}
-          path: .yara
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11  # v4.1.1
 
       - name: Setup Rust
         run: |
@@ -74,18 +46,15 @@ jobs:
           rustup default stable
 
       - name: Cache dependencies
-        uses: Swatinem/rust-cache@23bce251a8cd2ffc3c1075eaa2367cf899916d84 # v2.7.3
+        uses: Swatinem/rust-cache@23bce251a8cd2ffc3c1075eaa2367cf899916d84  # v2.7.3
         with:
           key: x86_64-unknown-linux-gnu
 
       - name: Run Clippy
-        env:
-          YARA_INCLUDE_DIR: ${{ github.workspace }}/.yara/${{ needs.yara.outputs.include-dir }}
-          YARA_LIBRARY_PATH: ${{ github.workspace }}/.yara/${{ needs.yara.outputs.library-path }}
         run: cargo clippy -- -D clippy::all -D clippy::pedantic -D clippy::cargo -A clippy::cargo_common_metadata -A clippy::multiple_crate_versions
 
   test:
-    needs: [yara, yara-output]
+    needs: lint
 
     strategy:
       matrix:
@@ -96,13 +65,7 @@ jobs:
     runs-on: ${{ matrix.triple.runs-on }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
-
-      - name: Download YARA
-        uses: actions/download-artifact@6b208ae046db98c579e8a3aa621ab581ff575935 # v4.1.1
-        with:
-          name: ${{ fromJson(needs.yara-output.outputs.result).artifacts[matrix.triple.runs-on] }}
-          path: .yara
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11  # v4.1.1
 
       - name: Setup Rust
         run: |
@@ -111,58 +74,52 @@ jobs:
           rustup default stable
 
       - name: Cache dependencies
-        uses: Swatinem/rust-cache@23bce251a8cd2ffc3c1075eaa2367cf899916d84 # v2.7.3
+        uses: Swatinem/rust-cache@23bce251a8cd2ffc3c1075eaa2367cf899916d84  # v2.7.3
         with:
           key: ${{ matrix.triple.target }}
 
       - name: Run tests
         env:
           RUST_BACKTRACE: full
-          YARA_INCLUDE_DIR: ${{ github.workspace }}/.yara/${{ needs.yara.outputs.include-dir }}
-          YARA_LIBRARY_PATH: ${{ github.workspace }}/.yara/${{ needs.yara.outputs.library-path }}
         run: cargo test --no-fail-fast
 
   docs-build:
-    needs: [yara]
-    runs-on: ubuntu-22.04
+    needs: lint
 
+    runs-on: ubuntu-22.04
     steps:
-      - name: "Checkout repository"
-        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - name: Checkout repository
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11  # v4.1.1
+
+      - name: Setup Rust
+        run: |
+          set -e
+          rustup toolchain install stable --no-self-update --profile minimal
+          rustup default stable
 
       - name: Cache dependencies
-        uses: Swatinem/rust-cache@23bce251a8cd2ffc3c1075eaa2367cf899916d84 # v2.7.3
+        uses: Swatinem/rust-cache@23bce251a8cd2ffc3c1075eaa2367cf899916d84  # v2.7.3
         with:
           key: x86_64-unknown-linux-gnu
 
-      - name: Download YARA
-        uses: actions/download-artifact@6b208ae046db98c579e8a3aa621ab581ff575935 # v4.1.1
-        with:
-          name: ${{ needs.yara.outputs.artifacts }}
-          path: .yara
-
-      - name: "Build docs with cargo"
+      - name: Build docs
         run: cargo doc --no-deps --document-private-items
-        env:
-          YARA_INCLUDE_DIR: ${{ github.workspace }}/.yara/${{ needs.yara.outputs.include-dir }}
-          YARA_LIBRARY_PATH: ${{ github.workspace }}/.yara/${{ needs.yara.outputs.library-path }}
 
-      # `.lock` is set to to rw-------, which causes actions/deploy-pages to fail 
-      # because it's expecting all files to be at least rw-r--r--
-      - name: "Remove '.lock' file"
+      # `.lock` is set to `rw-------`, which causes `actions/deploy-pages` to fail,
+      # because it expects all files to be at least `rw-r--r--`
+      - name: Remove '.lock' file
         run: rm ./target/doc/.lock
 
-      - name: "Upload artifact"
-        uses: actions/upload-pages-artifact@0252fc4ba7626f0298f0cf00902a25c6afc77fa8 # v3.0.0
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@0252fc4ba7626f0298f0cf00902a25c6afc77fa8  # v3.0.0
         with:
           path: ./target/doc
 
   docs-deploy:
     needs: docs-build
-
     if: github.ref == 'refs/heads/main'
 
-    # Sets permissions of the GITHUB_TOKEN to allow deployment to GitHub Pages
+    # Sets permissions of the `GITHUB_TOKEN` to allow deployment to GitHub Pages
     permissions:
       contents: read
       pages: write
@@ -173,8 +130,7 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
 
     runs-on: ubuntu-22.04
-
     steps:
-      - name: "Deploy to GitHub Pages"
+      - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@87c3283f01cd6fe19a0ab93a23b2f6fcba5a8e42 # v4.0.3
+        uses: actions/deploy-pages@87c3283f01cd6fe19a0ab93a23b2f6fcba5a8e42  # v4.0.3
