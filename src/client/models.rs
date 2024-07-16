@@ -5,7 +5,12 @@ use std::collections::HashMap;
 use std::fmt::Display;
 use yara::{Compiler, Rules};
 
-pub type ScanResult = Result<SubmitJobResultsSuccess, SubmitJobResultsError>;
+#[derive(Serialize, Debug)]
+#[serde(untagged)]
+pub enum ScanResult {
+    Ok(SubmitJobResultsSuccess),
+    Err(SubmitJobResultsError),
+}
 
 #[derive(Debug, Serialize, PartialEq)]
 pub struct SubmitJobResultsSuccess {

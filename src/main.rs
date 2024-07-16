@@ -27,9 +27,9 @@ fn scan_package(client: &DragonflyClient, job: Job) -> ScanResult {
                 PackageScanResults::new(job.name, job.version, results, job.hash);
             let body = package_scan_results.build_body();
 
-            Ok(body)
+            ScanResult::Ok(body)
         }
-        Err(err) => Err(SubmitJobResultsError {
+        Err(err) => ScanResult::Err(SubmitJobResultsError {
             name: job.name,
             version: job.version,
             reason: format!("{err}"),
