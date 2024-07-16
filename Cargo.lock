@@ -422,6 +422,7 @@ dependencies = [
  "parking_lot",
  "reqwest",
  "serde",
+ "serde_json",
  "tar",
  "tracing",
  "tracing-subscriber",
