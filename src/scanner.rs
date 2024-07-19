@@ -276,7 +276,10 @@ mod tests {
     use yara::Compiler;
 
     use super::{scan_file, DistributionScanResults, PackageScanResults};
-    use crate::{client::{ScanResult, SubmitJobResultsError, SubmitJobResultsSuccess}, scanner::{FileScanResult, RuleScore}};
+    use crate::{
+        client::{ScanResult, SubmitJobResultsError, SubmitJobResultsSuccess},
+        scanner::{FileScanResult, RuleScore},
+    };
 
     #[test]
     fn test_scan_result_success_serialization() {
