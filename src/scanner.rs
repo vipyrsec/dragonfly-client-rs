@@ -277,7 +277,7 @@ mod tests {
 
     use super::{scan_file, DistributionScanResults, PackageScanResults};
     use crate::{
-        client::{ScanResult, SubmitJobResultsError, SubmitJobResultsSuccess},
+        client::{ScanResultSerializer, SubmitJobResultsError, SubmitJobResultsSuccess},
         scanner::{FileScanResult, RuleScore},
     };
 
@@ -292,7 +292,7 @@ mod tests {
             commit: "commit hash".into(),
         };
 
-        let scan_result = ScanResult::Ok(success);
+        let scan_result: ScanResultSerializer = Ok(success).into();
         let actual = serde_json::to_string(&scan_result).unwrap();
         let expected = r#"{"name":"test","version":"1.0.0","score":10,"inspector_url":"inspector url","rules_matched":["abc","def"],"commit":"commit hash"}"#;
 
@@ -307,7 +307,7 @@ mod tests {
             reason: "Package too large".into(),
         };
 
-        let scan_result = ScanResult::Err(error);
+        let scan_result: ScanResultSerializer = Err(error).into();
         let actual = serde_json::to_string(&scan_result).unwrap();
         let expected = r#"{"name":"test","version":"1.0.0","reason":"Package too large"}"#;
 

@@ -138,7 +138,7 @@ impl DragonflyClient {
     }
 
     /// Send a [`crate::client::models::ScanResult`] to mainframe
-    pub fn send_result(&mut self, body: &models::ScanResult) -> reqwest::Result<()> {
+    pub fn send_result(&mut self, body: models::ScanResult) -> reqwest::Result<()> {
         self.reauthenticate();
 
         send_result(

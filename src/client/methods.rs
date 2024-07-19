@@ -1,4 +1,4 @@
-use super::models;
+use super::{models, ScanResultSerializer};
 
 use crate::APP_CONFIG;
 use reqwest::blocking::Client;
@@ -51,8 +51,9 @@ pub fn fetch_rules(
 pub fn send_result(
     http_client: &Client,
     access_token: &str,
-    body: &models::ScanResult,
+    body: models::ScanResult,
 ) -> reqwest::Result<()> {
+    let body: ScanResultSerializer = body.into();
     http_client
         .put(format!("{}/package", APP_CONFIG.base_url))
         .header("Authorization", format!("Bearer {access_token}"))

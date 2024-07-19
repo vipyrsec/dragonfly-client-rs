@@ -67,7 +67,7 @@ fn main() -> Result<()> {
                 }
 
                 let scan_result = scan_package(&client, job);
-                let http_result = client.send_result(&scan_result);
+                let http_result = client.send_result(scan_result);
                 if let Err(err) = http_result {
                     error!("Error while sending response to API: {err}");
                 }
