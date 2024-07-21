@@ -19,7 +19,7 @@ tracing = "0.1.40"
 tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
 yara = "0.27.0"
 yara-sys = { version = "0.27.0", features = ["yara-static"] }
-zip = "2.1.1"
+zip = "2.1.5"
 
 [profile.release]
 strip = true
