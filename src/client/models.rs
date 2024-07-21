@@ -5,6 +5,25 @@ use std::collections::HashMap;
 use std::fmt::Display;
 use yara::{Compiler, Rules};
 
+pub type ScanResult = Result<SubmitJobResultsSuccess, SubmitJobResultsError>;
+
+#[derive(Serialize, Debug)]
+#[serde(untagged)]
+#[serde(remote = "ScanResult")]
+enum ScanResultDef {
+    Ok(SubmitJobResultsSuccess),
+    Err(SubmitJobResultsError),
+}
+
+#[derive(Serialize)]
+pub struct ScanResultSerializer(#[serde(with = "ScanResultDef")] ScanResult);
+
+impl From<ScanResult> for ScanResultSerializer {
+    fn from(value: ScanResult) -> Self {
+        Self(value)
+    }
+}
+
 #[derive(Debug, Serialize, PartialEq)]
 pub struct SubmitJobResultsSuccess {
     pub name: String,
@@ -72,7 +91,6 @@ impl RulesResponse {
 pub struct AuthResponse {
     pub access_token: String,
     pub expires_in: u32,
-    pub token_type: String,
 }
 
 #[derive(Debug, Serialize)]
