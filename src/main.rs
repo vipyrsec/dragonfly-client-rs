@@ -73,11 +73,15 @@ fn main() -> Result<()> {
                 }
             }
 
-            Ok(None) => info!("No job found"),
+            Ok(None) => {
+                info!("No job found");
+                std::thread::sleep(Duration::from_secs(APP_CONFIG.load_duration));
+            }
 
-            Err(err) => error!("Unexpected HTTP error: {err}"),
+            Err(err) => {
+                error!("Unexpected HTTP error: {err}");
+                std::thread::sleep(Duration::from_secs(APP_CONFIG.load_duration));
+            }
         }
-
-        std::thread::sleep(Duration::from_secs(APP_CONFIG.load_duration));
     }
 }
