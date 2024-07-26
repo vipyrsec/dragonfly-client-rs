@@ -1,15 +1,22 @@
+use core::fmt;
 use std::{
     collections::HashSet,
+    fmt::write,
     io::Read,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
+    time::Instant,
 };
 
-use color_eyre::Result;
+use color_eyre::{eyre::eyre, Result};
+use flate2::read::GzDecoder;
 use reqwest::{blocking::Client, Url};
+use tracing::{debug, warn};
 use yara::Rules;
+use zip::read::read_zipfile_from_stream;
 
 use crate::{
-    client::{fetch_tarball, fetch_zipfile, Job, SubmitJobResultsSuccess, TarballType, ZipType},
+    app_config::APP_CONFIG,
+    client::{fetch_tarball, fetch_zipfile, Job},
     exts::RuleExt,
     utils::create_inspector_url,
 };
@@ -21,7 +28,7 @@ pub struct RuleScore {
 }
 
 /// The results of scanning a single file. Contains the file path and the rules it matched
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct FileScanResult {
     pub path: PathBuf,
     pub rules: Vec<RuleScore>,
@@ -38,77 +45,23 @@ impl FileScanResult {
     }
 }
 
-/// Scan an archive format using Yara rules.
-trait Scan {
-    fn scan(&mut self, rules: &Rules) -> Result<Vec<FileScanResult>>;
-}
-
-impl Scan for TarballType {
-    /// Scan a tarball against the given rule set
-    fn scan(&mut self, rules: &Rules) -> Result<Vec<FileScanResult>> {
-        let file_scan_results = self
-            .entries()?
-            .filter_map(Result::ok)
-            .map(|mut tarfile| {
-                let path = tarfile.path()?.to_path_buf();
-                scan_file(&mut tarfile, &path, rules)
-            })
-            .filter_map(Result::ok)
-            .collect();
-
-        Ok(file_scan_results)
-    }
-}
-
-impl Scan for ZipType {
-    /// Scan a zipfile against the given rule set
-    fn scan(&mut self, rules: &Rules) -> Result<Vec<FileScanResult>> {
-        let mut file_scan_results = Vec::new();
-        for idx in 0..self.len() {
-            let mut file = self.by_index(idx)?;
-            let path = PathBuf::from(file.name());
-            let scan_results = scan_file(&mut file, &path, rules)?;
-            file_scan_results.push(scan_results);
-        }
-
-        Ok(file_scan_results)
-    }
-}
-
-/// A distribution consisting of an archive and an inspector url.
-struct Distribution {
-    file: Box<dyn Scan>,
-    inspector_url: Url,
-}
-
-impl Distribution {
-    fn scan(&mut self, rules: &Rules) -> Result<DistributionScanResults> {
-        let results = self.file.scan(rules)?;
-
-        Ok(DistributionScanResults::new(
-            results,
-            self.inspector_url.clone(),
-        ))
-    }
-}
-
 /// Struct representing the results of a scanned distribution
 #[derive(Debug)]
 pub struct DistributionScanResults {
     /// The scan results for each file in this distribution
     file_scan_results: Vec<FileScanResult>,
 
-    /// The inspector URL pointing to this distribution's base
-    inspector_url: Url,
+    /// Inspector URL pointing to the base of this distribution
+    base_inspector_url: String,
 }
 
 impl DistributionScanResults {
     /// Create a new `DistributionScanResults` based off the results of its files and the base
     /// inspector URL for this distribution.
-    pub fn new(file_scan_results: Vec<FileScanResult>, inspector_url: Url) -> Self {
+    pub fn new(file_scan_results: Vec<FileScanResult>, base_inspector_url: String) -> Self {
         Self {
             file_scan_results,
-            inspector_url,
+            base_inspector_url,
         }
     }
 
@@ -151,11 +104,14 @@ impl DistributionScanResults {
     /// file
     pub fn inspector_url(&self) -> Option<String> {
         self.get_most_malicious_file().map(|file| {
-            format!(
-                "{}{}",
-                self.inspector_url.as_str(),
-                file.path.to_string_lossy().as_ref()
-            )
+            let it = file
+                .path
+                .components()
+                .filter(|c| !matches!(c, Component::RootDir))
+                .map(|c| c.as_os_str().to_string_lossy());
+            let mut url: Url = self.base_inspector_url.parse().unwrap();
+            url.path_segments_mut().unwrap().pop_if_empty().extend(it);
+            url.to_string()
         })
     }
 }
@@ -181,40 +137,6 @@ impl PackageScanResults {
             commit_hash,
         }
     }
-
-    /// Format the package scan results into something that can be sent over the API
-    pub fn build_body(&self) -> SubmitJobResultsSuccess {
-        let highest_score_distribution = self
-            .distribution_scan_results
-            .iter()
-            .max_by_key(|distrib| distrib.get_total_score());
-
-        let score = highest_score_distribution
-            .map(DistributionScanResults::get_total_score)
-            .unwrap_or_default();
-
-        let inspector_url =
-            highest_score_distribution.and_then(DistributionScanResults::inspector_url);
-
-        // collect all rule identifiers into a HashSet to dedup, then convert to Vec
-        let rules_matched = self
-            .distribution_scan_results
-            .iter()
-            .flat_map(DistributionScanResults::get_matched_rule_identifiers)
-            .map(std::string::ToString::to_string)
-            .collect::<HashSet<String>>()
-            .into_iter()
-            .collect();
-
-        SubmitJobResultsSuccess {
-            name: self.name.clone(),
-            version: self.version.clone(),
-            score,
-            inspector_url,
-            rules_matched,
-            commit: self.commit_hash.clone(),
-        }
-    }
 }
 
 /// Scan all the distributions of the given job against the given ruleset
@@ -228,21 +150,100 @@ pub fn scan_all_distributions(
     let mut distribution_scan_results = Vec::with_capacity(job.distributions.len());
     for distribution in &job.distributions {
         let download_url: Url = distribution.parse().unwrap();
-        let inspector_url = create_inspector_url(&job.name, &job.version, &download_url);
+        let base_inspector_url =
+            create_inspector_url(&job.name, &job.version, &download_url).to_string();
 
-        let mut dist = Distribution {
-            file: if distribution.ends_with(".tar.gz") {
-                Box::new(fetch_tarball(http_client, &download_url)?)
-            } else {
-                Box::new(fetch_zipfile(http_client, &download_url)?)
-            },
-            inspector_url,
+        let distribution_scan_result: DistributionScanResults = if distribution.ends_with(".tar.gz")
+        {
+            let mut tar = fetch_tarball(http_client, &download_url)?;
+            let file_scan_results = scan_targz(&mut tar, rules)?;
+            DistributionScanResults::new(file_scan_results, base_inspector_url)
+        } else {
+            let mut response = fetch_zipfile(http_client, &download_url)?;
+            let file_scan_results = scan_zip(&mut response, rules)?;
+            DistributionScanResults::new(file_scan_results, base_inspector_url)
         };
-        let distribution_scan_result = dist.scan(rules)?;
+
         distribution_scan_results.push(distribution_scan_result);
     }
 
     Ok(distribution_scan_results)
+}
+
+pub fn scan_targz<R: Read>(
+    tar: &mut tar::Archive<GzDecoder<R>>,
+    rules: &Rules,
+) -> Result<Vec<FileScanResult>> {
+    let mut file_scan_results: Vec<FileScanResult> = Vec::new();
+
+    for mut entry in tar.entries()?.filter_map(Result::ok) {
+        let pathbuf = entry.path()?.to_path_buf();
+        if entry.size() <= APP_CONFIG.max_scan_size {
+            let mut buf = Vec::with_capacity(entry.size().try_into().unwrap_or_default());
+            entry.read_to_end(&mut buf)?;
+
+            let instant = Instant::now();
+            let result = scan_buf(buf.as_slice(), pathbuf.as_path(), rules)?;
+            let elapsed = instant.elapsed();
+
+            debug!(
+                "Finished scanning {} in {} ms",
+                pathbuf.to_string_lossy(),
+                elapsed.as_millis()
+            );
+
+            file_scan_results.push(result);
+        } else {
+            return Err(eyre!(
+                "File {} too large, {} bytes > {} bytes",
+                pathbuf.to_string_lossy(),
+                entry.size(),
+                APP_CONFIG.max_scan_size
+            ));
+        }
+    }
+
+    Ok(file_scan_results)
+}
+
+pub fn scan_zip<R: Read>(source: &mut R, rules: &Rules) -> Result<Vec<FileScanResult>> {
+    let mut file_scan_results: Vec<FileScanResult> = Vec::new();
+    while let Ok(Some(mut file)) = read_zipfile_from_stream(source) {
+        if let Some(pathbuf) = file.enclosed_name() {
+            if file.size() <= APP_CONFIG.max_scan_size {
+                let mut buf = Vec::with_capacity(file.size().try_into().unwrap_or_default());
+                file.read_to_end(&mut buf)?;
+
+                let instant = Instant::now();
+                let result = scan_buf(buf.as_slice(), pathbuf.as_path(), rules)?;
+                let elapsed = instant.elapsed();
+
+                debug!(
+                    "Finished scanning {} in {} ms",
+                    pathbuf.to_string_lossy(),
+                    elapsed.as_millis()
+                );
+
+                file_scan_results.push(result);
+            } else {
+                warn!(
+                    "{} is greater than maximum configured scan size ({} bytes), skipping",
+                    pathbuf.to_string_lossy(),
+                    APP_CONFIG.max_scan_size
+                );
+                return Err(eyre!(
+                    "File {} too large, {} bytes > {} bytes",
+                    pathbuf.to_string_lossy(),
+                    file.size(),
+                    APP_CONFIG.max_scan_size
+                ));
+            };
+        } else {
+            warn!("{} could not be parsed into a path, skipping", file.name());
+        }
+    }
+
+    Ok(file_scan_results)
 }
 
 /// Scan a file given it implements `Read`.
@@ -250,19 +251,16 @@ pub fn scan_all_distributions(
 /// # Arguments
 /// * `path` - The path corresponding to this file
 /// * `rules` - The compiled rule set to scan this file against
-fn scan_file(file: &mut impl Read, path: &Path, rules: &Rules) -> Result<FileScanResult> {
-    let mut buffer = Vec::new();
-    file.read_to_end(&mut buffer)?;
-
+fn scan_buf(buf: &[u8], path: &Path, rules: &Rules) -> Result<FileScanResult> {
     let rules = rules
-        .scan_mem(&buffer, 10)?
+        .scan_mem(buf, 10)?
         .into_iter()
         .filter(|rule| {
             let filetypes = rule.get_filetypes();
             filetypes.is_empty()
                 || filetypes
                     .iter()
-                    .any(|filetype| path.to_string_lossy().ends_with(filetype))
+                    .any(|filetype| path.extension().unwrap_or_default() == *filetype)
         })
         .map(RuleScore::from)
         .collect();
@@ -272,14 +270,121 @@ fn scan_file(file: &mut impl Read, path: &Path, rules: &Rules) -> Result<FileSca
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashSet, path::PathBuf};
-    use yara::Compiler;
-
-    use super::{scan_file, DistributionScanResults, PackageScanResults};
-    use crate::{
-        client::{ScanResultSerializer, SubmitJobResultsError, SubmitJobResultsSuccess},
-        scanner::{FileScanResult, RuleScore},
+    use flate2::{read::GzDecoder, write::GzEncoder, Compression};
+    use std::{
+        collections::HashSet,
+        io::{Cursor, Write},
+        path::PathBuf,
     };
+    use yara::{Compiler, Rules};
+    use zip::{write::SimpleFileOptions, ZipWriter};
+
+    use super::{scan_buf, DistributionScanResults, PackageScanResults};
+    use crate::{
+        client::{
+            build_body, ScanResultSerializer, SubmitJobResultsError, SubmitJobResultsSuccess,
+        },
+        scanner::{scan_targz, scan_zip, FileScanResult, RuleScore},
+    };
+
+    fn generate_sample_rules() -> Rules {
+        let rules = r#"
+            rule contains_rust {
+                meta:
+                    weight = 5
+                strings:
+                    $rust = "rust" nocase
+                condition:
+                    $rust
+            }
+        "#;
+
+        let compiler = Compiler::new().unwrap().add_rules_str(rules).unwrap();
+
+        compiler.compile_rules().unwrap()
+    }
+
+    #[test]
+    fn test_zipfile() {
+        let mut buf: Vec<u8> = Vec::new();
+        let mut zip = ZipWriter::new(Cursor::new(&mut buf));
+        let options = SimpleFileOptions::default();
+
+        zip.start_file("file1.txt", options).unwrap();
+        let file1_contents = b"rust";
+        zip.write(file1_contents).unwrap();
+
+        zip.start_file("file2.txt", options).unwrap();
+        let file2_contents = b"contents of file two";
+        zip.write(file2_contents).unwrap();
+
+        zip.finish().unwrap();
+
+        let rules = generate_sample_rules();
+        let mut file_scan_results = scan_zip(&mut &buf[..], &rules).unwrap().into_iter();
+
+        let expected = FileScanResult {
+            path: PathBuf::from("file1.txt"),
+            rules: vec![RuleScore {
+                name: "contains_rust".into(),
+                score: 5,
+            }],
+        };
+        assert_eq!(file_scan_results.next(), Some(expected));
+
+        let expected = FileScanResult {
+            path: PathBuf::from("file2.txt"),
+            rules: vec![],
+        };
+        assert_eq!(file_scan_results.next(), Some(expected));
+
+        assert_eq!(file_scan_results.next(), None);
+    }
+
+    #[test]
+    fn test_tarball() {
+        let mut builder = tar::Builder::new(GzEncoder::new(Vec::new(), Compression::default()));
+
+        let mut header = tar::Header::new_gnu();
+        let file1_contents = b"rust";
+        header.set_size(file1_contents.len().try_into().unwrap());
+        header.set_cksum();
+        builder
+            .append_data(&mut header, "file1.txt", file1_contents.as_slice())
+            .unwrap();
+
+        let mut header = tar::Header::new_gnu();
+        let file2_contents = b"contents of file two";
+        header.set_size(file2_contents.len().try_into().unwrap());
+        header.set_cksum();
+        builder
+            .append_data(&mut header, "file2.txt", file2_contents.as_slice())
+            .unwrap();
+
+        let data = builder.into_inner().unwrap().finish().unwrap();
+
+        let mut archive = tar::Archive::new(GzDecoder::new(data.as_slice()));
+
+        let rules = generate_sample_rules();
+        let mut file_scan_results = scan_targz(&mut archive, &rules).unwrap().into_iter();
+
+        let expected = FileScanResult {
+            path: PathBuf::from("file1.txt"),
+            rules: vec![RuleScore {
+                name: "contains_rust".into(),
+                score: 5,
+            }],
+        };
+        assert_eq!(file_scan_results.next(), Some(expected));
+
+        let expected = FileScanResult {
+            path: PathBuf::from("file2.txt"),
+            rules: vec![],
+        };
+        assert_eq!(file_scan_results.next(), Some(expected));
+
+        assert_eq!(file_scan_results.next(), None);
+    }
 
     #[test]
     fn test_scan_result_success_serialization() {
@@ -338,21 +443,21 @@ mod tests {
     fn test_get_most_malicious_file() {
         let file_scan_results = vec![
             FileScanResult {
-                path: PathBuf::default(),
+                path: PathBuf::from("/abc/file1"),
                 rules: vec![RuleScore {
                     name: String::from("rule1"),
                     score: 5,
                 }],
             },
             FileScanResult {
-                path: PathBuf::default(),
+                path: PathBuf::from("/abc/file2"),
                 rules: vec![RuleScore {
                     name: String::from("rule2"),
                     score: 7,
                 }],
             },
             FileScanResult {
-                path: PathBuf::default(),
+                path: PathBuf::from("/abc/file3"),
                 rules: vec![RuleScore {
                     name: String::from("rule3"),
                     score: 4,
@@ -360,18 +465,22 @@ mod tests {
             },
         ];
 
+        let expected = FileScanResult {
+            path: PathBuf::from("/abc/file2"),
+            rules: vec![RuleScore {
+                name: String::from("rule2"),
+                score: 7,
+            }],
+        };
+
         let distribution_scan_results = DistributionScanResults {
             file_scan_results,
-            inspector_url: reqwest::Url::parse("https://example.net").unwrap(),
+            base_inspector_url: String::default(),
         };
 
         assert_eq!(
-            distribution_scan_results
-                .get_most_malicious_file()
-                .unwrap()
-                .rules[0]
-                .name,
-            "rule2"
+            distribution_scan_results.get_most_malicious_file(),
+            Some(&expected)
         )
     }
 
@@ -421,7 +530,7 @@ mod tests {
 
         let distribution_scan_results = DistributionScanResults {
             file_scan_results,
-            inspector_url: reqwest::Url::parse("https://example.net").unwrap(),
+            base_inspector_url: String::default(),
         };
 
         let matched_rules: HashSet<RuleScore> = distribution_scan_results
@@ -498,7 +607,7 @@ mod tests {
 
         let distribution_scan_results = DistributionScanResults {
             file_scan_results,
-            inspector_url: reqwest::Url::parse("https://example.net").unwrap(),
+            base_inspector_url: String::default(),
         };
 
         let matched_rule_identifiers = distribution_scan_results.get_matched_rule_identifiers();
@@ -515,14 +624,14 @@ mod tests {
     fn test_build_package_scan_results_body() {
         let file_scan_results1 = vec![
             FileScanResult {
-                path: PathBuf::default(),
+                path: "abc/file1.txt".into(),
                 rules: vec![RuleScore {
                     name: String::from("rule1"),
                     score: 5,
                 }],
             },
             FileScanResult {
-                path: PathBuf::default(),
+                path: "abc/file2.txt".into(),
                 rules: vec![RuleScore {
                     name: String::from("rule2"),
                     score: 7,
@@ -531,19 +640,19 @@ mod tests {
         ];
         let distribution_scan_results1 = DistributionScanResults {
             file_scan_results: file_scan_results1,
-            inspector_url: reqwest::Url::parse("https://example.net/distrib1.tar.gz").unwrap(),
+            base_inspector_url: "http://example.com/dist1/".into(),
         };
 
         let file_scan_results2 = vec![
             FileScanResult {
-                path: PathBuf::default(),
+                path: "abc/file1.txt".into(),
                 rules: vec![RuleScore {
                     name: String::from("rule3"),
                     score: 2,
                 }],
             },
             FileScanResult {
-                path: PathBuf::default(),
+                path: "abc/file1.txt".into(),
                 rules: vec![RuleScore {
                     name: String::from("rule4"),
                     score: 9,
@@ -552,7 +661,7 @@ mod tests {
         ];
         let distribution_scan_results2 = DistributionScanResults {
             file_scan_results: file_scan_results2,
-            inspector_url: reqwest::Url::parse("https://example.net/distrib2.whl").unwrap(),
+            base_inspector_url: "http://example.com/dist2/".into(),
         };
 
         let package_scan_results = PackageScanResults {
@@ -562,11 +671,11 @@ mod tests {
             commit_hash: String::from("abc"),
         };
 
-        let body = package_scan_results.build_body();
+        let body = build_body(&package_scan_results);
 
         assert_eq!(
             body.inspector_url,
-            Some(String::from("https://example.net/distrib1.tar.gz"))
+            Some(String::from("http://example.com/dist1/abc/file2.txt"))
         );
         assert_eq!(body.score, 12);
         assert_eq!(
@@ -596,8 +705,7 @@ mod tests {
         let compiler = Compiler::new().unwrap().add_rules_str(rules).unwrap();
 
         let rules = compiler.compile_rules().unwrap();
-        let result =
-            scan_file(&mut "I love Rust!".as_bytes(), &PathBuf::default(), &rules).unwrap();
+        let result = scan_buf(&mut "I love Rust!".as_bytes(), &PathBuf::default(), &rules).unwrap();
 
         assert_eq!(result.path, PathBuf::default());
         assert_eq!(

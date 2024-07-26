@@ -2,24 +2,19 @@ mod methods;
 mod models;
 
 use chrono::{DateTime, TimeDelta, Utc};
+use flate2::read::GzDecoder;
 pub use methods::*;
 pub use models::*;
 
-use crate::APP_CONFIG;
 use color_eyre::Result;
-use flate2::read::GzDecoder;
-use reqwest::{blocking::Client, Url};
-use std::{
-    io::{Cursor, Read},
-    time::Duration,
+use reqwest::{
+    blocking::{Client, Response},
+    Url,
 };
+use std::{collections::HashSet, time::Duration};
 use tracing::{error, info, trace, warn};
 
-/// Type alias representing a tar archive
-pub type TarballType = tar::Archive<Cursor<Vec<u8>>>;
-
-/// Type alias representing a zip archive
-pub type ZipType = zip::ZipArchive<Cursor<Vec<u8>>>;
+use crate::scanner::{DistributionScanResults, PackageScanResults};
 
 pub struct AuthState {
     pub access_token: String,
@@ -154,25 +149,56 @@ impl DragonflyClient {
     }
 }
 
-pub fn fetch_tarball(http_client: &Client, download_url: &Url) -> Result<TarballType> {
+/// Return a tar archive backed by a gzip decompression stream, which itself is backed by the
+/// Response.
+pub fn fetch_tarball(
+    http_client: &Client,
+    download_url: &Url,
+) -> Result<tar::Archive<GzDecoder<Response>>> {
     let response = http_client.get(download_url.clone()).send()?;
 
-    let decompressed = GzDecoder::new(response);
-    let mut cursor: Cursor<Vec<u8>> = Cursor::new(Vec::new());
-    decompressed
-        .take(APP_CONFIG.max_scan_size)
-        .read_to_end(cursor.get_mut())?;
+    let decoder = GzDecoder::new(response);
+    let tar = tar::Archive::new(decoder);
 
-    Ok(tar::Archive::new(cursor))
+    Ok(tar)
 }
 
-pub fn fetch_zipfile(http_client: &Client, download_url: &Url) -> Result<ZipType> {
+/// Return a Response from which zipfiles can be streamed using `read_zipfile_from_stream`.
+pub fn fetch_zipfile(http_client: &Client, download_url: &Url) -> Result<Response> {
     let response = http_client.get(download_url.to_string()).send()?;
 
-    let mut cursor = Cursor::new(Vec::new());
-    response
-        .take(APP_CONFIG.max_scan_size)
-        .read_to_end(cursor.get_mut())?;
+    Ok(response)
+}
 
-    Ok(zip::ZipArchive::new(cursor)?)
+/// Format the package scan results into something that can be sent over the API
+pub fn build_body(package_scan_results: &PackageScanResults) -> SubmitJobResultsSuccess {
+    let highest_score_distribution = package_scan_results
+        .distribution_scan_results
+        .iter()
+        .max_by_key(|distrib| distrib.get_total_score());
+
+    let score = highest_score_distribution
+        .map(DistributionScanResults::get_total_score)
+        .unwrap_or_default();
+
+    let inspector_url = highest_score_distribution.and_then(DistributionScanResults::inspector_url);
+
+    // collect all rule identifiers into a HashSet to dedup, then convert to Vec
+    let rules_matched = package_scan_results
+        .distribution_scan_results
+        .iter()
+        .flat_map(DistributionScanResults::get_matched_rule_identifiers)
+        .map(std::string::ToString::to_string)
+        .collect::<HashSet<String>>()
+        .into_iter()
+        .collect();
+
+    SubmitJobResultsSuccess {
+        name: package_scan_results.name.clone(),
+        version: package_scan_results.version.clone(),
+        score,
+        inspector_url,
+        rules_matched,
+        commit: package_scan_results.commit_hash.clone(),
+    }
 }
