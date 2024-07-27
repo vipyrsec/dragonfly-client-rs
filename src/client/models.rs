@@ -71,15 +71,10 @@ pub struct RulesResponse {
 impl RulesResponse {
     /// Compile the rules from the response
     pub fn compile(&self) -> Result<yara_x::Rules> {
-        let rules_str = self
-            .rules
-            .values()
-            .map(String::as_ref)
-            .collect::<Vec<&str>>()
-            .join("\n");
-
         let mut compiler = yara_x::Compiler::new();
-        compiler.add_source(rules_str.as_str())?;
+        for source in self.rules.values() {
+            compiler.add_source(source.as_str())?;
+        }
 
         Ok(compiler.build())
     }
