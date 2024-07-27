@@ -6,7 +6,7 @@ mod utils;
 
 use std::time::Duration;
 
-use client::DragonflyClient;
+use client::{build_body, DragonflyClient};
 use color_eyre::eyre::Result;
 use tracing::{error, info, span, trace, Level};
 use tracing_subscriber::EnvFilter;
@@ -25,7 +25,7 @@ fn scan_package(client: &DragonflyClient, job: Job) -> ScanResult {
         Ok(results) => {
             let package_scan_results =
                 PackageScanResults::new(job.name, job.version, results, job.hash);
-            let body = package_scan_results.build_body();
+            let body = build_body(&package_scan_results);
 
             Ok(body)
         }
