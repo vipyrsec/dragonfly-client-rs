@@ -81,9 +81,7 @@ impl RulesResponse {
         let mut compiler = yara_x::Compiler::new();
         compiler.add_source(rules_str.as_str())?;
 
-        let rules = compiler.build();
-
-        Ok(rules)
+        Ok(compiler.build())
     }
 }
 
