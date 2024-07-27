@@ -1,7 +1,5 @@
-use core::fmt;
 use std::{
     collections::HashSet,
-    fmt::write,
     io::Read,
     path::{Component, Path, PathBuf},
     time::Instant,
@@ -11,7 +9,7 @@ use color_eyre::{eyre::eyre, Result};
 use flate2::read::GzDecoder;
 use reqwest::{blocking::Client, Url};
 use tracing::{debug, warn};
-use yara::Rules;
+use yara_x::Rules;
 use zip::read::read_zipfile_from_stream;
 
 use crate::{
@@ -252,9 +250,10 @@ pub fn scan_zip<R: Read>(source: &mut R, rules: &Rules) -> Result<Vec<FileScanRe
 /// * `path` - The path corresponding to this file
 /// * `rules` - The compiled rule set to scan this file against
 fn scan_buf(buf: &[u8], path: &Path, rules: &Rules) -> Result<FileScanResult> {
-    let rules = rules
-        .scan_mem(buf, 10)?
-        .into_iter()
+    let mut scanner = yara_x::Scanner::new(rules);
+    let rules = scanner
+        .scan(buf)?
+        .matching_rules()
         .filter(|rule| {
             let filetypes = rule.get_filetypes();
             filetypes.is_empty()
@@ -276,15 +275,19 @@ mod tests {
         io::{Cursor, Write},
         path::PathBuf,
     };
-    use yara::{Compiler, Rules};
-    use zip::{write::SimpleFileOptions, ZipWriter};
+    use yara_x::Compiler;
 
     use super::{scan_buf, DistributionScanResults, PackageScanResults};
     use crate::{
-        client::{
-            build_body, ScanResultSerializer, SubmitJobResultsError, SubmitJobResultsSuccess,
-        },
-        scanner::{scan_targz, scan_zip, FileScanResult, RuleScore},
+        client::{ScanResultSerializer, SubmitJobResultsError, SubmitJobResultsSuccess},
+        scanner::{FileScanResult, RuleScore},
+    };
+    use yara_x::Rules;
+    use zip::{write::SimpleFileOptions, ZipWriter};
+
+    use crate::{
+        client::build_body,
+        scanner::{scan_targz, scan_zip},
     };
 
     fn generate_sample_rules() -> Rules {
@@ -299,9 +302,10 @@ mod tests {
             }
         "#;
 
-        let compiler = Compiler::new().unwrap().add_rules_str(rules).unwrap();
+        let mut compiler = Compiler::new();
+        compiler.add_source(rules).unwrap();
 
-        compiler.compile_rules().unwrap()
+        compiler.build()
     }
 
     #[test]
@@ -702,9 +706,10 @@ mod tests {
             }
         "#;
 
-        let compiler = Compiler::new().unwrap().add_rules_str(rules).unwrap();
+        let mut compiler = Compiler::new();
+        compiler.add_source(rules).unwrap();
+        let rules = compiler.build();
 
-        let rules = compiler.compile_rules().unwrap();
         let result = scan_buf(&mut "I love Rust!".as_bytes(), &PathBuf::default(), &rules).unwrap();
 
         assert_eq!(result.path, PathBuf::default());

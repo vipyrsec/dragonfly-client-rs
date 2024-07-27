@@ -22,7 +22,7 @@ pub struct AuthState {
 }
 
 pub struct RulesState {
-    pub rules: yara::Rules,
+    pub rules: yara_x::Rules,
     pub hash: String,
 }
 
