@@ -250,7 +250,7 @@ pub fn scan_all_distributions(
 /// # Arguments
 /// * `path` - The path corresponding to this file
 /// * `rules` - The compiled rule set to scan this file against
-fn scan_file(file: &mut impl Read, path: &Path, rules: &yara_x::Rules) -> Result<FileScanResult> {
+fn scan_file(file: &mut impl Read, path: &Path, rules: &Rules) -> Result<FileScanResult> {
     let mut buffer = Vec::new();
     file.read_to_end(&mut buffer)?;
 
