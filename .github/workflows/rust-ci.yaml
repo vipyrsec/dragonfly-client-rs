@@ -22,14 +22,11 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11  # v4.1.1
 
-      - name: Setup Rust
-        run: |
-          set -e
-          rustup toolchain install stable --no-self-update --profile minimal --component rustfmt
-          rustup default stable
+      - name: Check format
+        run: cargo fmt --check
 
-      - name: Run Clippy
-        run: cargo fmt --all --check
+      - name: Check errors
+        run: cargo check
 
   clippy:
     needs: lint
@@ -39,19 +36,19 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11  # v4.1.1
 
-      - name: Setup Rust
-        run: |
-          set -e
-          rustup toolchain install stable --no-self-update --profile minimal --component clippy
-          rustup default stable
-
       - name: Cache dependencies
         uses: Swatinem/rust-cache@23bce251a8cd2ffc3c1075eaa2367cf899916d84  # v2.7.3
         with:
           key: x86_64-unknown-linux-gnu
 
       - name: Run Clippy
-        run: cargo clippy -- -D clippy::all -D clippy::pedantic -D clippy::cargo -A clippy::cargo_common_metadata -A clippy::multiple_crate_versions
+        run: >
+          cargo clippy -- \
+            -D clippy::all \
+            -D clippy::cargo \
+            -D clippy::pedantic \
+            -A clippy::cargo_common_metadata \
+            -A clippy::multiple_crate_versions
 
   test:
     needs: lint
@@ -66,12 +63,6 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11  # v4.1.1
-
-      - name: Setup Rust
-        run: |
-          set -e
-          rustup toolchain install stable --no-self-update --profile minimal
-          rustup default stable
 
       - name: Cache dependencies
         uses: Swatinem/rust-cache@23bce251a8cd2ffc3c1075eaa2367cf899916d84  # v2.7.3
@@ -90,12 +81,6 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11  # v4.1.1
-
-      - name: Setup Rust
-        run: |
-          set -e
-          rustup toolchain install stable --no-self-update --profile minimal
-          rustup default stable
 
       - name: Cache dependencies
         uses: Swatinem/rust-cache@23bce251a8cd2ffc3c1075eaa2367cf899916d84  # v2.7.3
@@ -131,6 +116,6 @@ jobs:
 
     runs-on: ubuntu-22.04
     steps:
-      - name: Deploy to GitHub Pages
+      - name: Deploy docs to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@87c3283f01cd6fe19a0ab93a23b2f6fcba5a8e42  # v4.0.3
