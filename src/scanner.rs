@@ -6,7 +6,7 @@ use std::{
 
 use color_eyre::Result;
 use reqwest::{blocking::Client, Url};
-use yara_x::Rules;
+use yara::Rules;
 
 use crate::{
     client::{fetch_tarball, fetch_zipfile, Job, SubmitJobResultsSuccess, TarballType, ZipType},
@@ -254,11 +254,9 @@ fn scan_file(file: &mut impl Read, path: &Path, rules: &Rules) -> Result<FileSca
     let mut buffer = Vec::new();
     file.read_to_end(&mut buffer)?;
 
-    let mut scanner = yara_x::Scanner::new(rules);
-
-    let rules = scanner
-        .scan(buffer.as_slice())?
-        .matching_rules()
+    let rules = rules
+        .scan_mem(&buffer, 10)?
+        .into_iter()
         .filter(|rule| {
             let filetypes = rule.get_filetypes();
             filetypes.is_empty()
@@ -275,7 +273,7 @@ fn scan_file(file: &mut impl Read, path: &Path, rules: &Rules) -> Result<FileSca
 #[cfg(test)]
 mod tests {
     use std::{collections::HashSet, path::PathBuf};
-    use yara_x::Compiler;
+    use yara::Compiler;
 
     use super::{scan_file, DistributionScanResults, PackageScanResults};
     use crate::{
@@ -595,10 +593,9 @@ mod tests {
             }
         "#;
 
-        let mut compiler = Compiler::new();
-        compiler.add_source(rules).unwrap();
-        let rules = compiler.build();
+        let compiler = Compiler::new().unwrap().add_rules_str(rules).unwrap();
 
+        let rules = compiler.compile_rules().unwrap();
         let result =
             scan_file(&mut "I love Rust!".as_bytes(), &PathBuf::default(), &rules).unwrap();
 
