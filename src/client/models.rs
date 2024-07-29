@@ -3,6 +3,7 @@ use serde::Serialize;
 use serde::{self, Deserialize};
 use std::collections::HashMap;
 use std::fmt::Display;
+use yara::{Compiler, Rules};
 
 pub type ScanResult = Result<SubmitJobResultsSuccess, SubmitJobResultsError>;
 
@@ -70,13 +71,19 @@ pub struct RulesResponse {
 
 impl RulesResponse {
     /// Compile the rules from the response
-    pub fn compile(&self) -> Result<yara_x::Rules> {
-        let mut compiler = yara_x::Compiler::new();
-        for source in self.rules.values() {
-            compiler.add_source(source.as_str())?;
-        }
+    pub fn compile(&self) -> Result<Rules> {
+        let rules_str = self
+            .rules
+            .values()
+            .map(String::as_ref)
+            .collect::<Vec<&str>>()
+            .join("\n");
 
-        Ok(compiler.build())
+        let compiled_rules = Compiler::new()?
+            .add_rules_str(&rules_str)?
+            .compile_rules()?;
+
+        Ok(compiled_rules)
     }
 }
 
