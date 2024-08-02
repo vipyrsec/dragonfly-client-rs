@@ -169,6 +169,4 @@ they do
 | `DRAGONFLY_CLIENT_SECRET` |                                  | Auth0 client secret                       |
 | `DRAGONFLY_USERNAME`      |                                  | Provisioned username                      |
 | `DRAGONFLY_PASSWORD`      |                                  | Provisioned password                      |
-| `DRAGONFLY_THREADS`       | Available parallelism / `1`      | Attemps to auto-detect the amount of threads, or defaults to 1 if not possible |
 | `DRAGONFLY_LOAD_DURATION` | 60                               | Seconds to wait between each API job request |
-| `DRAGONFLY_BULK_SIZE`     | 20                               | The amount of jobs to request at once |
