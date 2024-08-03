@@ -115,12 +115,10 @@ jobs:
       # https://github.com/sigstore/cosign
       - name: Sign the published Docker image
         if: ${{ github.ref == 'refs/heads/main' || startswith(github.event.ref, 'refs/tags/v') }}
-        env:
-          COSIGN_EXPERIMENTAL: 'true'
         shell: bash
         # This step uses the identity token to provision an ephemeral certificate against the sigstore community Fulcio
         # instance.
-        run: cosign sign ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.docker_build_push.outputs.digest }}
+        run: cosign sign --yes ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.docker_build_push.outputs.digest }}
 
       - name: Export digest
         if: ${{ github.ref == 'refs/heads/main' || startswith(github.event.ref, 'refs/tags/v') }}
