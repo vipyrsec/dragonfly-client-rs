@@ -140,10 +140,12 @@ jobs:
       - name: "Remove '.lock' file"
         run: rm ./target/doc/.lock
 
+      # Commented out to test mdbook
+      #
       # `cargo doc` builds the docs without a top level `index.html`, so add
       # a barebones one to redirect to the generated one.
-      - name: "Add redirect index.html"
-        run: echo '<meta http-equiv="refresh" content="0; url=dragonfly_client_rs">' > target/doc/index.html
+      #- name: "Add redirect index.html"
+      #  run: echo '<meta http-equiv="refresh" content="0; url=dragonfly_client_rs">' > target/doc/index.html
 
       - name: "Upload artifact"
         uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa  # v3.0.1
