@@ -38,3 +38,12 @@ use these, see [tuning](docs/tuning.md).
 | `DRAGONFLY_PASSWORD`      |                                  | Provisioned password                         |
 | `DRAGONFLY_LOAD_DURATION` | `60`                             | Seconds to wait between each API job request |
 | `DRAGONFLY_MAX_SCAN_SIZE` | `128_000_000`                    | Maximum distribution size in bytes to scan   |
+
+## Building docs locally
+
+We use [`mdbook`](https://rust-lang.github.io/mdBook/index.html) for docs as
+well as [`cargo doc`](https://doc.rust-lang.org/cargo/commands/cargo-doc.html).
+The easiest way to build locally:
+
+* For `docs/`: `mdbook serve`
+* For doc comments: `cargo doc --document-private-items --no-deps`
