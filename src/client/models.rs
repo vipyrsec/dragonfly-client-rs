@@ -3,7 +3,8 @@ use serde::Serialize;
 use serde::{self, Deserialize};
 use std::collections::HashMap;
 use std::fmt::Display;
-use yara::{Compiler, Rules};
+use std::path::PathBuf;
+use yara::{Compiler, Metadata, Rule, Rules, YrString};
 
 pub type ScanResult = Result<SubmitJobResultsSuccess, SubmitJobResultsError>;
 
@@ -36,6 +37,121 @@ pub struct SubmitJobResultsSuccess {
 
     /// The commit hash of the ruleset used to produce these results.
     pub commit: String,
+
+    pub files: Vec<FileScanResult>,
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize)]
+pub struct FileScanResult {
+    pub path: PathBuf,
+    pub matches: Vec<RuleMatch>,
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize)]
+pub struct RuleMatch {
+    pub identifier: String,
+    pub patterns: Vec<PatternMatch>,
+    pub metadata: HashMap<String, MetadataValue>,
+}
+
+/// Owned version of yara::MetadataValue
+#[derive(Debug, PartialEq, Eq, Serialize)]
+pub enum MetadataValue {
+    Integer(i64),
+    String(String),
+    Boolean(bool),
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize)]
+pub struct PatternMatch {
+    pub identifier: String,
+    pub matches: Vec<Match>,
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize)]
+pub struct Match {
+    pub range: Range,
+    pub data: Vec<u8>,
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize)]
+pub struct Range {
+    pub start: i32,
+    pub end: i32,
+}
+
+impl FileScanResult {
+    pub fn new(path: PathBuf, matches: Vec<Rule>) -> Self {
+        let mut out = Vec::new();
+
+        for match_ in matches {
+            out.push(RuleMatch::new(match_));
+        }
+
+        Self { path, matches: out }
+    }
+
+    /// Returns the total score of all matched rules.
+    pub fn calculate_score(&self) -> i64 {
+        self.matches
+            .iter()
+            .map(|rule_match| rule_match.score())
+            .sum()
+    }
+}
+
+impl RuleMatch {
+    pub fn new(rule: Rule) -> Self {
+        Self {
+            identifier: rule.identifier.to_string(),
+            patterns: rule.strings.into_iter().map(PatternMatch::new).collect(),
+            metadata: Self::map_from_metadata(rule.metadatas),
+        }
+    }
+
+    pub fn score(&self) -> i64 {
+        if let Some(&MetadataValue::Integer(score)) = self.metadata.get("weight") {
+            score
+        } else {
+            0
+        }
+    }
+
+    fn map_from_metadata(metadata: Vec<Metadata>) -> HashMap<String, MetadataValue> {
+        let mut out = HashMap::new();
+
+        for val in metadata {
+            let metadata_value = match val.value {
+                yara::MetadataValue::Integer(i) => MetadataValue::Integer(i),
+                yara::MetadataValue::String(s) => MetadataValue::String(s.to_string()),
+                yara::MetadataValue::Boolean(b) => MetadataValue::Boolean(b),
+            };
+            out.insert(val.identifier.to_string(), metadata_value);
+        }
+
+        out
+    }
+}
+
+impl PatternMatch {
+    pub fn new(yr_string: YrString) -> Self {
+        Self {
+            identifier: yr_string.identifier.to_string(),
+            matches: yr_string.matches.into_iter().map(Match::new).collect(),
+        }
+    }
+}
+
+impl Match {
+    pub fn new(match_: yara::Match) -> Self {
+        Self {
+            range: Range {
+                start: match_.base as i32,
+                end: match_.offset as i32,
+            },
+            data: match_.data,
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]

@@ -9,7 +9,10 @@ use reqwest::{blocking::Client, Url};
 use yara::Rules;
 
 use crate::{
-    client::{fetch_tarball, fetch_zipfile, Job, SubmitJobResultsSuccess, TarballType, ZipType},
+    client::{
+        fetch_tarball, fetch_zipfile, FileScanResult, Job, SubmitJobResultsSuccess, TarballType,
+        ZipType,
+    },
     exts::RuleExt,
     utils::create_inspector_url,
 };
@@ -18,24 +21,6 @@ use crate::{
 pub struct RuleScore {
     pub name: String,
     pub score: i64,
-}
-
-/// The results of scanning a single file. Contains the file path and the rules it matched
-#[derive(Debug)]
-pub struct FileScanResult {
-    pub path: PathBuf,
-    pub rules: Vec<RuleScore>,
-}
-
-impl FileScanResult {
-    fn new(path: PathBuf, rules: Vec<RuleScore>) -> Self {
-        Self { path, rules }
-    }
-
-    /// Returns the total score of all matched rules.
-    fn calculate_score(&self) -> i64 {
-        self.rules.iter().map(|i| i.score).sum()
-    }
 }
 
 /// Scan an archive format using Yara rules.
@@ -112,6 +97,13 @@ impl DistributionScanResults {
         }
     }
 
+    pub fn get_total_score(&self) -> i64 {
+        self.file_scan_results
+            .iter()
+            .map(|fsr| fsr.calculate_score())
+            .sum()
+    }
+
     /// Get the "most malicious file" in the distribution.
     ///
     /// This file with the greatest score is considered the most malicious. If multiple
@@ -132,11 +124,6 @@ impl DistributionScanResults {
         }
 
         rules
-    }
-
-    /// Calculate the total score of this distribution, without counting duplicates twice
-    pub fn get_total_score(&self) -> i64 {
-        self.get_matched_rules().iter().map(|rule| rule.score).sum()
     }
 
     /// Get a vector of the **unique** rule identifiers this distribution matched
@@ -183,7 +170,7 @@ impl PackageScanResults {
     }
 
     /// Format the package scan results into something that can be sent over the API
-    pub fn build_body(&self) -> SubmitJobResultsSuccess {
+    pub fn build_body(self) -> SubmitJobResultsSuccess {
         let highest_score_distribution = self
             .distribution_scan_results
             .iter()
@@ -207,12 +194,17 @@ impl PackageScanResults {
             .collect();
 
         SubmitJobResultsSuccess {
-            name: self.name.clone(),
-            version: self.version.clone(),
+            name: self.name,
+            version: self.version,
             score,
             inspector_url,
             rules_matched,
-            commit: self.commit_hash.clone(),
+            commit: self.commit_hash,
+            files: self
+                .distribution_scan_results
+                .into_iter()
+                .flat_map(|dsr| dsr.file_scan_results)
+                .collect(),
         }
     }
 }
