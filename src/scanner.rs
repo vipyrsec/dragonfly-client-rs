@@ -210,6 +210,7 @@ impl PackageScanResults {
                 .distribution_scan_results
                 .into_iter()
                 .map(|dsr| dsr.distro_scan_results)
+                .filter(|dsr| !dsr.files.is_empty())
                 .collect(),
         }
     }

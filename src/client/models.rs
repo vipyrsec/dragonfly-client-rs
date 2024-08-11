@@ -89,9 +89,14 @@ pub struct Range {
 
 impl DistributionScanResult {
     pub fn new(download_url: String, files: Vec<FileScanResult>) -> Self {
+        let filtered = files
+            .into_iter()
+            .filter(|file| !file.matches.is_empty())
+            .collect();
+
         Self {
             download_url,
-            files,
+            files: filtered,
         }
     }
 }
@@ -117,7 +122,12 @@ impl RuleMatch {
     pub fn new(rule: Rule) -> Self {
         Self {
             identifier: rule.identifier.to_string(),
-            patterns: rule.strings.into_iter().map(PatternMatch::new).collect(),
+            patterns: rule
+                .strings
+                .into_iter()
+                .filter(|yr_string| !yr_string.matches.is_empty())
+                .map(PatternMatch::new)
+                .collect(),
             metadata: Self::map_from_metadata(rule.metadatas),
         }
     }
