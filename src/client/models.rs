@@ -103,13 +103,10 @@ impl DistributionScanResult {
 
 impl FileScanResult {
     pub fn new(path: PathBuf, matches: Vec<Rule>) -> Self {
-        let mut out = Vec::new();
-
-        for match_ in matches {
-            out.push(RuleMatch::new(match_));
+        Self {
+            path,
+            matches: matches.into_iter().map(RuleMatch::from).collect(),
         }
-
-        Self { path, matches: out }
     }
 
     /// Returns the total score of all matched rules.
@@ -118,20 +115,22 @@ impl FileScanResult {
     }
 }
 
-impl RuleMatch {
-    pub fn new(rule: Rule) -> Self {
+impl From<Rule<'_>> for RuleMatch {
+    fn from(rule: Rule) -> Self {
         Self {
             identifier: rule.identifier.to_string(),
             patterns: rule
                 .strings
                 .into_iter()
                 .filter(|yr_string| !yr_string.matches.is_empty())
-                .map(PatternMatch::new)
+                .map(PatternMatch::from)
                 .collect(),
             metadata: Self::map_from_metadata(rule.metadatas),
         }
     }
+}
 
+impl RuleMatch {
     pub fn score(&self) -> i64 {
         if let Some(&MetadataValue::Integer(score)) = self.metadata.get("weight") {
             score
@@ -156,17 +155,17 @@ impl RuleMatch {
     }
 }
 
-impl PatternMatch {
-    pub fn new(yr_string: YrString) -> Self {
+impl From<YrString<'_>> for PatternMatch {
+    fn from(yr_string: YrString) -> Self {
         Self {
             identifier: yr_string.identifier.to_string(),
-            matches: yr_string.matches.into_iter().map(Match::new).collect(),
+            matches: yr_string.matches.into_iter().map(Match::from).collect(),
         }
     }
 }
 
-impl Match {
-    pub fn new(match_: yara::Match) -> Self {
+impl From<yara::Match> for Match {
+    fn from(match_: yara::Match) -> Self {
         Self {
             range: Range {
                 start: match_.offset,
