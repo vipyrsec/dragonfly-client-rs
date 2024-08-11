@@ -1,0 +1,4 @@
+[formatting]
+column_width = 120
+compact_inline_tables = true
+indent_tables = true
