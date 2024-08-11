@@ -61,14 +61,6 @@ repos:
           - rust
         pass_filenames: false
 
-  - repo: https://github.com/hadolint/hadolint
-    rev: 80e0d3d0c58dcdcbced97854ab7c5cf00a5f1a86  # frozen: v2.13.0-beta
-    hooks:
-      - id: hadolint
-        args:
-          - --failure-threshold
-          - error
-
   - repo: https://github.com/python-jsonschema/check-jsonschema
     rev: e2dde74d0702d15f4f43e4f4fb93e301b4bc1e30  # frozen: 0.29.1
     hooks:
