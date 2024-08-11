@@ -18,19 +18,20 @@ This section goes over how to set up a client instance locally and via Docker.
 - [YARA](https://yara.readthedocs.io/en/stable/gettingstarted.html#compiling-and-installing-yara)
 
 #### 1. Set the appropriate environment variable pointing to the YARA installation
-```sh
+
+```bash
 export YARA_LIBRARY_PATH='/path/to/yara/libs'
 ```
 
 #### 2. Build the binary with `cargo`
 
-```sh
+```bash
 cargo build --release
 ```
 
 #### 3. Run the built binary
 
-```sh
+```bash
 ./target/release/dragonfly-client-rs
 ```
 
@@ -42,13 +43,13 @@ cargo build --release
 
 #### 1. Build and tag the image
 
-```sh
+```bash
 docker build --tag vipyrsec/dragonfly-client-rs:latest .
 ```
 
 #### 2. Run the container
 
-```sh
+```bash
 docker run --name dragonfly-client-rs vipyrsec/dragonfly-client-rs:latest
 ```
 
@@ -61,11 +62,12 @@ docker run --name dragonfly-client-rs vipyrsec/dragonfly-client-rs:latest
 
 #### Run the service
 
-```
+```bash
 docker compose up
 ```
 
 ### How it works: Overview
+
 The follow is a brief overview of how the client works. A more extensive
 writeup can be found towards the bottom of this page.
 
@@ -77,8 +79,10 @@ sender thread.
 - The Loader Thread - This thread is responsible for requesting jobs from the API and submitting them to the threadpool.
 
 ### Performance, efficiency, and optimization
+
 The client aims to be highly configurable to suit a variety of host machines.
 The environment variables of most value in this regard are as follows:
+
 - `DRAGONFLY_THREADS` defaults to the number of available parallelism, or
   1 if it could not be determined. [This
   page](https://doc.rust-lang.org/stable/std/thread/fn.available_parallelism.html)
@@ -103,8 +107,8 @@ ground that works best in your environment. However, we have tried our best to
 provide sensible defaults that will work reasonably efficiently: 20 jobs are
 requested from the API every 60 seconds.
 
-
 ### How it works: Detailed Breakdown
+
 This section attempts to describe in detail how the client works under the
 hood, and how the various configuration parameters come into play.
 
@@ -160,15 +164,17 @@ it's results over the Dragonfly HTTP API.
 Below are a list of environment variables that need to be configured, and what
 they do
 
-| Variable                  | Default                          | Description                               |
-| ------------------------- | -------------------------------- | ----------------------------------------- |
-| `DRAGONFLY_BASE_URL`      | `https://dragonfly.vipyrsec.com` | The base API URL for the mainframe server |
-| `DRAGONFLY_AUTH0_DOMAIN`  | `vipyrsec.us.auth0.com`          | The auth0 domain that requests go to      |
-| `DRAGONFLY_AUDIENCE`      | `https://dragonfly.vipyrsec.com` | Auth0 Audience field                      |
-| `DRAGONFLY_CLIENT_ID`     |                                  | Auth0 client ID                           |
-| `DRAGONFLY_CLIENT_SECRET` |                                  | Auth0 client secret                       |
-| `DRAGONFLY_USERNAME`      |                                  | Provisioned username                      |
-| `DRAGONFLY_PASSWORD`      |                                  | Provisioned password                      |
-| `DRAGONFLY_THREADS`       | Available parallelism / `1`      | Attemps to auto-detect the amount of threads, or defaults to 1 if not possible |
-| `DRAGONFLY_LOAD_DURATION` | 60                               | Seconds to wait between each API job request |
-| `DRAGONFLY_BULK_SIZE`     | 20                               | The amount of jobs to request at once |
+<!-- markdownlint-disable MD013 -->
+| Variable                  | Default                          | Description                                                                     |
+| ------------------------- | -------------------------------- | ------------------------------------------------------------------------------- |
+| `DRAGONFLY_BASE_URL`      | `https://dragonfly.vipyrsec.com` | The base API URL for the mainframe server                                       |
+| `DRAGONFLY_AUTH0_DOMAIN`  | `vipyrsec.us.auth0.com`          | The auth0 domain that requests go to                                            |
+| `DRAGONFLY_AUDIENCE`      | `https://dragonfly.vipyrsec.com` | Auth0 Audience field                                                            |
+| `DRAGONFLY_CLIENT_ID`     |                                  | Auth0 client ID                                                                 |
+| `DRAGONFLY_CLIENT_SECRET` |                                  | Auth0 client secret                                                             |
+| `DRAGONFLY_USERNAME`      |                                  | Provisioned username                                                            |
+| `DRAGONFLY_PASSWORD`      |                                  | Provisioned password                                                            |
+| `DRAGONFLY_THREADS`       | Available parallelism / `1`      | Attempts to auto-detect the amount of threads, or defaults to 1 if not possible |
+| `DRAGONFLY_LOAD_DURATION` | 60                               | Seconds to wait between each API job request                                    |
+| `DRAGONFLY_BULK_SIZE`     | 20                               | The amount of jobs to request at once                                           |
+<!-- markdownlint-enable MD013 -->

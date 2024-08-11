@@ -372,7 +372,7 @@ mod tests {
                 .rules[0]
                 .name,
             "rule2"
-        )
+        );
     }
 
     #[test]
@@ -449,7 +449,7 @@ mod tests {
             },
         ]);
 
-        assert_eq!(matched_rules, expected_rules)
+        assert_eq!(matched_rules, expected_rules);
     }
 
     #[test]
@@ -508,7 +508,7 @@ mod tests {
         assert_eq!(
             HashSet::<_>::from_iter(matched_rule_identifiers),
             HashSet::<_>::from_iter(expected_rule_identifiers)
-        )
+        );
     }
 
     #[test]
