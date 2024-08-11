@@ -38,6 +38,12 @@ pub struct SubmitJobResultsSuccess {
     /// The commit hash of the ruleset used to produce these results.
     pub commit: String,
 
+    pub distributions: Vec<DistributionScanResult>,
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize)]
+pub struct DistributionScanResult {
+    pub download_url: String,
     pub files: Vec<FileScanResult>,
 }
 
@@ -79,6 +85,15 @@ pub struct Match {
 pub struct Range {
     pub start: usize,
     pub end: usize,
+}
+
+impl DistributionScanResult {
+    pub fn new(download_url: String, files: Vec<FileScanResult>) -> Self {
+        Self {
+            download_url,
+            files,
+        }
+    }
 }
 
 impl FileScanResult {
@@ -221,29 +236,59 @@ pub struct AuthBody<'a> {
 
 #[cfg(test)]
 mod tests {
+    use crate::client::DistributionScanResult;
     use crate::test::make_file_scan_result;
 
     #[test]
-    fn test_serialize_file_scan_result() {
-        let fsr = make_file_scan_result("ayo", &[("rule1", 5), ("rule2", 7)]);
+    fn test_serialize_distribution_scan_result() {
+        let fsrs = vec![
+            make_file_scan_result("file1", &[("rule1", 5), ("rule2", 7)]),
+            make_file_scan_result("file2", &[("rule5", 100), ("rule3", 1)]),
+        ];
 
-        let actual = serde_json::to_value(&fsr).unwrap();
+        let distro = DistributionScanResult::new("https://example.com".into(), fsrs);
+
+        let actual = serde_json::to_value(&distro).unwrap();
         let expected = serde_json::json!({
-            "path": "ayo",
-            "matches": [
+            "download_url": "https://example.com",
+            "files": [
                 {
-                    "identifier": "rule1",
-                    "patterns": [],
-                    "metadata": {
-                        "weight": 5,
-                    }
+                    "path": "file1",
+                    "matches": [
+                        {
+                            "identifier": "rule1",
+                            "patterns": [],
+                            "metadata": {
+                                "weight": 5,
+                            }
+                        },
+                        {
+                            "identifier": "rule2",
+                            "patterns": [],
+                            "metadata": {
+                                "weight": 7,
+                            }
+                        }
+                    ]
                 },
                 {
-                    "identifier": "rule2",
-                    "patterns": [],
-                    "metadata": {
-                        "weight": 7,
-                    }
+                    "path": "file2",
+                    "matches": [
+                        {
+                            "identifier": "rule5",
+                            "patterns": [],
+                            "metadata": {
+                                "weight": 100,
+                            }
+                        },
+                        {
+                            "identifier": "rule3",
+                            "patterns": [],
+                            "metadata": {
+                                "weight": 1,
+                            }
+                        }
+                    ]
                 }
             ]
         });
