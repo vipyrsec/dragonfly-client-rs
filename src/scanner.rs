@@ -8,6 +8,7 @@ use color_eyre::Result;
 use reqwest::{blocking::Client, Url};
 use yara::Rules;
 
+use crate::client::DistributionScanResult;
 use crate::{
     client::{
         fetch_tarball, fetch_zipfile, FileScanResult, Job, SubmitJobResultsSuccess, TarballType,
@@ -58,6 +59,7 @@ impl Scan for ZipType {
 struct Distribution {
     file: Box<dyn Scan>,
     inspector_url: Url,
+    download_url: Url,
 }
 
 impl Distribution {
@@ -67,6 +69,7 @@ impl Distribution {
         Ok(DistributionScanResults::new(
             results,
             self.inspector_url.clone(),
+            &self.download_url,
         ))
     }
 }
@@ -75,7 +78,7 @@ impl Distribution {
 #[derive(Debug)]
 pub struct DistributionScanResults {
     /// The scan results for each file in this distribution
-    file_scan_results: Vec<FileScanResult>,
+    distro_scan_results: DistributionScanResult,
 
     /// The inspector URL pointing to this distribution's base
     inspector_url: Url,
@@ -84,17 +87,25 @@ pub struct DistributionScanResults {
 impl DistributionScanResults {
     /// Create a new `DistributionScanResults` based off the results of its files and the base
     /// inspector URL for this distribution.
-    pub fn new(file_scan_results: Vec<FileScanResult>, inspector_url: Url) -> Self {
+    pub fn new(
+        file_scan_results: Vec<FileScanResult>,
+        inspector_url: Url,
+        download_url: &Url,
+    ) -> Self {
         Self {
-            file_scan_results,
             inspector_url,
+            distro_scan_results: DistributionScanResult::new(
+                download_url.to_string(),
+                file_scan_results,
+            ),
         }
     }
 
     pub fn get_total_score(&self) -> i64 {
-        self.file_scan_results
+        self.distro_scan_results
+            .files
             .iter()
-            .map(|fsr| fsr.calculate_score())
+            .map(FileScanResult::calculate_score)
             .sum()
     }
 
@@ -103,7 +114,8 @@ impl DistributionScanResults {
     /// This file with the greatest score is considered the most malicious. If multiple
     /// files have the same score, an arbitrary file is picked.
     pub fn get_most_malicious_file(&self) -> Option<&FileScanResult> {
-        self.file_scan_results
+        self.distro_scan_results
+            .files
             .iter()
             .max_by_key(|i| i.calculate_score())
     }
@@ -111,7 +123,7 @@ impl DistributionScanResults {
     /// Get all **unique** `RuleMatch` objects that were matched for this distribution
     fn get_matched_rules(&self) -> HashSet<(&str, i64)> {
         let mut rules = HashSet::new();
-        for file_scan_result in &self.file_scan_results {
+        for file_scan_result in &self.distro_scan_results.files {
             for match_ in &file_scan_result.matches {
                 rules.insert((match_.identifier.as_str(), match_.score()));
             }
@@ -194,10 +206,10 @@ impl PackageScanResults {
             inspector_url,
             rules_matched,
             commit: self.commit_hash,
-            files: self
+            distributions: self
                 .distribution_scan_results
                 .into_iter()
-                .flat_map(|dsr| dsr.file_scan_results)
+                .map(|dsr| dsr.distro_scan_results)
                 .collect(),
         }
     }
@@ -223,6 +235,7 @@ pub fn scan_all_distributions(
                 Box::new(fetch_zipfile(http_client, &download_url)?)
             },
             inspector_url,
+            download_url,
         };
         let distribution_scan_result = dist.scan(rules)?;
         distribution_scan_results.push(distribution_scan_result);
@@ -257,12 +270,15 @@ fn scan_file(file: &mut impl Read, path: &Path, rules: &Rules) -> Result<FileSca
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashSet, path::PathBuf};
     use std::collections::HashMap;
+    use std::{collections::HashSet, path::PathBuf};
     use yara::Compiler;
 
     use super::{scan_file, DistributionScanResults, PackageScanResults};
-    use crate::client::{FileScanResult, Match, MetadataValue, PatternMatch, Range, RuleMatch, ScanResultSerializer, SubmitJobResultsError, SubmitJobResultsSuccess};
+    use crate::client::{
+        DistributionScanResult, Match, MetadataValue, PatternMatch, Range, RuleMatch,
+        ScanResultSerializer, SubmitJobResultsError, SubmitJobResultsSuccess,
+    };
     use crate::test::make_file_scan_result;
 
     #[test]
@@ -274,12 +290,12 @@ mod tests {
             inspector_url: Some("inspector url".into()),
             rules_matched: vec!["abc".into(), "def".into()],
             commit: "commit hash".into(),
-            files: Vec::new(),
+            distributions: Vec::new(),
         };
 
         let scan_result: ScanResultSerializer = Ok(success).into();
         let actual = serde_json::to_string(&scan_result).unwrap();
-        let expected = r#"{"name":"test","version":"1.0.0","score":10,"inspector_url":"inspector url","rules_matched":["abc","def"],"commit":"commit hash","files":[]}"#;
+        let expected = r#"{"name":"test","version":"1.0.0","score":10,"inspector_url":"inspector url","rules_matched":["abc","def"],"commit":"commit hash","distributions":[]}"#;
 
         assert_eq!(actual, expected);
     }
@@ -308,7 +324,7 @@ mod tests {
         ];
 
         let distribution_scan_results = DistributionScanResults {
-            file_scan_results,
+            distro_scan_results: DistributionScanResult::new("e".into(), file_scan_results),
             inspector_url: reqwest::Url::parse("https://example.net").unwrap(),
         };
 
@@ -331,7 +347,7 @@ mod tests {
         ];
 
         let distribution_scan_results = DistributionScanResults {
-            file_scan_results,
+            distro_scan_results: DistributionScanResult::new("e".into(), file_scan_results),
             inspector_url: reqwest::Url::parse("https://example.net").unwrap(),
         };
 
@@ -355,7 +371,7 @@ mod tests {
         ];
 
         let distribution_scan_results = DistributionScanResults {
-            file_scan_results,
+            distro_scan_results: DistributionScanResult::new("e".into(), file_scan_results),
             inspector_url: reqwest::Url::parse("https://example.net").unwrap(),
         };
 
@@ -376,7 +392,7 @@ mod tests {
             make_file_scan_result("/b", &[("rule2", 7)]),
         ];
         let distribution_scan_results1 = DistributionScanResults {
-            file_scan_results: file_scan_results1,
+            distro_scan_results: DistributionScanResult::new("e".into(), file_scan_results1),
             inspector_url: reqwest::Url::parse("https://example.net/distrib1.tar.gz").unwrap(),
         };
 
@@ -385,7 +401,7 @@ mod tests {
             make_file_scan_result("/d", &[("rule4", 9)]),
         ];
         let distribution_scan_results2 = DistributionScanResults {
-            file_scan_results: file_scan_results2,
+            distro_scan_results: DistributionScanResult::new("e".into(), file_scan_results2),
             inspector_url: reqwest::Url::parse("https://example.net/distrib2.whl").unwrap(),
         };
 
@@ -441,13 +457,12 @@ mod tests {
                     identifier: "$rust".to_string(),
                     matches: vec![Match {
                         data: vec![b'R', b'u', b's', b't'],
-                        range: Range {
-                            start: 7,
-                            end: 10,
-                        }
+                        range: Range { start: 7, end: 10 }
                     }]
                 }],
-                metadata: vec![("weight".to_string(), MetadataValue::Integer(5))].into_iter().collect::<HashMap<_, _>>(),
+                metadata: vec![("weight".to_string(), MetadataValue::Integer(5))]
+                    .into_iter()
+                    .collect::<HashMap<_, _>>(),
             },
             result.matches[0],
         );
