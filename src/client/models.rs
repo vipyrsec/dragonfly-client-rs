@@ -54,7 +54,7 @@ pub struct RuleMatch {
     pub metadata: HashMap<String, MetadataValue>,
 }
 
-/// Owned version of yara::MetadataValue
+/// Owned version of [`yara::MetadataValue`]
 #[derive(Debug, PartialEq, Eq, Serialize)]
 #[serde(untagged)]
 pub enum MetadataValue {
@@ -77,8 +77,8 @@ pub struct Match {
 
 #[derive(Debug, PartialEq, Eq, Serialize)]
 pub struct Range {
-    pub start: i32,
-    pub end: i32,
+    pub start: usize,
+    pub end: usize,
 }
 
 impl FileScanResult {
@@ -94,10 +94,7 @@ impl FileScanResult {
 
     /// Returns the total score of all matched rules.
     pub fn calculate_score(&self) -> i64 {
-        self.matches
-            .iter()
-            .map(|rule_match| rule_match.score())
-            .sum()
+        self.matches.iter().map(RuleMatch::score).sum()
     }
 }
 
@@ -147,8 +144,10 @@ impl Match {
     pub fn new(match_: yara::Match) -> Self {
         Self {
             range: Range {
-                start: match_.base as i32,
-                end: match_.offset as i32,
+                start: match_.offset,
+
+                // Fish assures me that we cannot have zero length matches, so this should never underflow
+                end: match_.offset + match_.data.len() - 1,
             },
             data: match_.data,
         }

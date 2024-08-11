@@ -440,7 +440,7 @@ mod tests {
                 patterns: vec![PatternMatch {
                     identifier: "$rust".to_string(),
                     matches: vec![Match {
-                        data: vec![b'r', b'u', b's', b't'],
+                        data: vec![b'R', b'u', b's', b't'],
                         range: Range {
                             start: 7,
                             end: 10,
