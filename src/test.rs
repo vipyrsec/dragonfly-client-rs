@@ -1,8 +1,8 @@
 //! # test
 //! Holds utility functions that are beneficial for testing
 
-use std::collections::HashMap;
 use crate::client::{FileScanResult, MetadataValue, RuleMatch};
+use std::collections::HashMap;
 
 /// Constructs a [`FileScanResult`] for testing
 ///
