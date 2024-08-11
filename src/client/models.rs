@@ -56,6 +56,7 @@ pub struct RuleMatch {
 
 /// Owned version of yara::MetadataValue
 #[derive(Debug, PartialEq, Eq, Serialize)]
+#[serde(untagged)]
 pub enum MetadataValue {
     Integer(i64),
     String(String),
@@ -217,4 +218,43 @@ pub struct AuthBody<'a> {
     pub grant_type: &'a str,
     pub username: &'a str,
     pub password: &'a str,
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::test::make_file_scan_result;
+
+    #[test]
+    fn test_serialize_file_scan_result() {
+        let fsr = make_file_scan_result("ayo", &[("rule1", 5), ("rule2", 7)]);
+
+        let actual = serde_json::to_value(&fsr).unwrap();
+        let expected = serde_json::json!({
+            "path": "ayo",
+            "matches": [
+                {
+                    "identifier": "rule1",
+                    "patterns": [],
+                    "metadata": {
+                        "weight": 5,
+                    }
+                },
+                {
+                    "identifier": "rule2",
+                    "patterns": [],
+                    "metadata": {
+                        "weight": 7,
+                    }
+                }
+            ]
+        });
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn test_file_score() {
+        let fsr = make_file_scan_result("ayo", &[("rule1", 5), ("rule2", 7)]);
+        assert_eq!(fsr.calculate_score(), 12);
+    }
 }
