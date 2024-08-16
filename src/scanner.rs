@@ -1,73 +1,36 @@
-use std::{
-    collections::HashSet,
-    io::Read,
-    path::{Path, PathBuf},
-};
+use std::{collections::HashSet, path::Path};
 
 use color_eyre::Result;
 use reqwest::{blocking::Client, Url};
+use tempfile::TempDir;
+use walkdir::WalkDir;
 use yara::Rules;
 
 use crate::client::DistributionScanResult;
 use crate::{
-    client::{
-        fetch_tarball, fetch_zipfile, FileScanResult, Job, SubmitJobResultsSuccess, TarballType,
-        ZipType,
-    },
+    client::{download_tarball, download_zipfile, FileScanResult, Job, SubmitJobResultsSuccess},
     exts::RuleExt,
     utils::create_inspector_url,
 };
 
-/// Scan an archive format using Yara rules.
-trait Scan {
-    fn scan(&mut self, rules: &Rules) -> Result<Vec<FileScanResult>>;
-}
-
-impl Scan for TarballType {
-    /// Scan a tarball against the given rule set
-    fn scan(&mut self, rules: &Rules) -> Result<Vec<FileScanResult>> {
-        let file_scan_results = self
-            .entries()?
-            .filter_map(Result::ok)
-            .map(|mut tarfile| {
-                let path = tarfile.path()?.to_path_buf();
-                scan_file(&mut tarfile, &path, rules)
-            })
-            .filter_map(Result::ok)
-            .collect();
-
-        Ok(file_scan_results)
-    }
-}
-
-impl Scan for ZipType {
-    /// Scan a zipfile against the given rule set
-    fn scan(&mut self, rules: &Rules) -> Result<Vec<FileScanResult>> {
-        let mut file_scan_results = Vec::new();
-        for idx in 0..self.len() {
-            let mut file = self.by_index(idx)?;
-            let path = PathBuf::from(file.name());
-            let scan_results = scan_file(&mut file, &path, rules)?;
-            file_scan_results.push(scan_results);
-        }
-
-        Ok(file_scan_results)
-    }
-}
-
 /// A distribution consisting of an archive and an inspector url.
 struct Distribution {
-    file: Box<dyn Scan>,
+    dir: TempDir,
     inspector_url: Url,
     download_url: Url,
 }
 
 impl Distribution {
     fn scan(&mut self, rules: &Rules) -> Result<DistributionScanResults> {
-        let results = self.file.scan(rules)?;
+        let mut file_scan_results: Vec<FileScanResult> = Vec::new();
+        for entry in WalkDir::new(self.dir.path()) {
+            let entry = entry?;
+            let file_scan_result = scan_file(entry.path(), rules)?;
+            file_scan_results.push(file_scan_result);
+        }
 
         Ok(DistributionScanResults::new(
-            results,
+            file_scan_results,
             self.inspector_url.clone(),
             &self.download_url,
         ))
@@ -229,12 +192,14 @@ pub fn scan_all_distributions(
         let download_url: Url = distribution.parse().unwrap();
         let inspector_url = create_inspector_url(&job.name, &job.version, &download_url);
 
+        let dir = if distribution.ends_with(".tar.gz") {
+            download_tarball(http_client, &download_url)
+        } else {
+            download_zipfile(http_client, &download_url)
+        }?;
+
         let mut dist = Distribution {
-            file: if distribution.ends_with(".tar.gz") {
-                Box::new(fetch_tarball(http_client, &download_url)?)
-            } else {
-                Box::new(fetch_zipfile(http_client, &download_url)?)
-            },
+            dir,
             inspector_url,
             download_url,
         };
@@ -245,17 +210,14 @@ pub fn scan_all_distributions(
     Ok(distribution_scan_results)
 }
 
-/// Scan a file given it implements `Read`.
+/// Scan a file given it's path, and compiled rules.
 ///
 /// # Arguments
-/// * `path` - The path corresponding to this file
+/// * `path` - The path of the file to scan.
 /// * `rules` - The compiled rule set to scan this file against
-fn scan_file(file: &mut impl Read, path: &Path, rules: &Rules) -> Result<FileScanResult> {
-    let mut buffer = Vec::new();
-    file.read_to_end(&mut buffer)?;
-
+fn scan_file(path: &Path, rules: &Rules) -> Result<FileScanResult> {
     let rules = rules
-        .scan_mem(&buffer, 10)?
+        .scan_file(path, 10)?
         .into_iter()
         .filter(|rule| {
             let filetypes = rule.get_filetypes();
@@ -447,8 +409,8 @@ mod tests {
         let compiler = Compiler::new().unwrap().add_rules_str(rules).unwrap();
 
         let rules = compiler.compile_rules().unwrap();
-        let result =
-            scan_file(&mut "I love Rust!".as_bytes(), &PathBuf::default(), &rules).unwrap();
+
+        let result = scan_file(&PathBuf::default(), &rules).unwrap();
 
         assert_eq!(result.path, PathBuf::default());
         assert_eq!(
