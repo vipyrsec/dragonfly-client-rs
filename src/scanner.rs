@@ -8,7 +8,7 @@ use yara::Rules;
 
 use crate::client::DistributionScanResult;
 use crate::{
-    client::{download_tarball, download_zipfile, FileScanResult, Job, SubmitJobResultsSuccess},
+    client::{download_distribution, FileScanResult, Job, SubmitJobResultsSuccess},
     exts::RuleExt,
     utils::create_inspector_url,
 };
@@ -192,11 +192,7 @@ pub fn scan_all_distributions(
         let download_url: Url = distribution.parse().unwrap();
         let inspector_url = create_inspector_url(&job.name, &job.version, &download_url);
 
-        let dir = if distribution.ends_with(".tar.gz") {
-            download_tarball(http_client, &download_url)
-        } else {
-            download_zipfile(http_client, &download_url)
-        }?;
+        let dir = download_distribution(http_client, download_url.clone())?;
 
         let mut dist = Distribution {
             dir,

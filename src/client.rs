@@ -5,11 +5,11 @@ use chrono::{DateTime, TimeDelta, Utc};
 use flate2::read::GzDecoder;
 pub use methods::*;
 pub use models::*;
-use tempfile::{tempdir, tempdir_in, tempfile, TempDir};
+use tempfile::{tempdir, tempfile, TempDir};
 
 use color_eyre::Result;
 use reqwest::{blocking::Client, Url};
-use std::{fs, io, time::Duration};
+use std::{io, time::Duration};
 use tracing::{error, info, trace, warn};
 
 pub struct AuthState {
@@ -145,17 +145,22 @@ impl DragonflyClient {
     }
 }
 
-/// Perform a request to the given download URL and stream the response body to a file.
-fn download_to_file(http_client: &Client, download_url: Url) -> Result<fs::File> {
-    let mut response = http_client.get(download_url).send()?;
-    let mut file = tempfile()?;
-    io::copy(&mut response, &mut file)?;
-
-    Ok(file)
+/// Download and unpack a tarball, return the [`TempDir`] containing the contents.
+fn extract_tarball<R: io::Read>(response: R) -> Result<TempDir> {
+    let mut tarball = tar::Archive::new(GzDecoder::new(response));
+    let tmpdir = tempdir()?;
+    tarball.unpack(tmpdir.path())?;
+    Ok(tmpdir)
 }
 
-/// Extract the given zipfile into a temporary directory
-fn extract_zipfile(file: fs::File) -> Result<TempDir> {
+/// Download and extract a zip, return the [`TempDir`] containing the contents.
+fn extract_zipfile<R: io::Read>(mut response: R) -> Result<TempDir> {
+    let mut file = tempfile()?;
+
+    // first write the archive to a file because `response` isn't Seek, which is needed by
+    // `zip::ZipArchive::new`
+    io::copy(&mut response, &mut file)?;
+
     let mut zip = zip::ZipArchive::new(file)?;
     let tmpdir = tempdir()?;
     zip.extract(tmpdir.path())?;
@@ -163,84 +168,14 @@ fn extract_zipfile(file: fs::File) -> Result<TempDir> {
     Ok(tmpdir)
 }
 
-/// Extract the given tarball into a temporary directory
-fn unpack_tarball(file: fs::File) -> Result<TempDir> {
-    let mut tar = tar::Archive::new(GzDecoder::new(file));
-    let tmpdir = tempdir()?;
-    tar.unpack(tmpdir.path())?;
+pub fn download_distribution(http_client: &Client, download_url: Url) -> Result<TempDir> {
+    // This conversion is fast as per the docs
+    let ends_with = download_url.as_str().ends_with(".tar.gz");
+    let response = http_client.get(download_url).send()?;
 
-    Ok(tmpdir)
-}
-
-/// Download and unpack a tarball, return the TempDir containing the contents.
-pub fn download_tarball(http_client: &Client, download_url: &Url) -> Result<TempDir> {
-    let file = download_to_file(http_client, download_url.to_owned())?;
-    let dir = unpack_tarball(file)?;
-
-    Ok(dir)
-}
-
-/// Download and extract a zip, return the TempDir containing the contents.
-pub fn download_zipfile(http_client: &Client, download_url: &Url) -> Result<TempDir> {
-    let file = download_to_file(http_client, download_url.to_owned())?;
-    let dir = extract_zipfile(file)?;
-
-    Ok(dir)
-}
-
-#[cfg(test)]
-mod tests {
-    use flate2::{write::GzEncoder, Compression};
-    use fs::File;
-    use io::Write;
-    use zip::{write::SimpleFileOptions, ZipWriter};
-
-    use super::*;
-
-    #[test]
-    fn test_extract_zipfile() {
-        let file = tempfile().unwrap();
-        let mut zip = ZipWriter::new(file);
-
-        let options =
-            SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
-        zip.start_file("hello_world.txt", options).unwrap();
-        zip.write(b"Hello, world!").unwrap();
-        let file = zip.finish().unwrap();
-
-        let dir = extract_zipfile(file).unwrap();
-        let n = dir.path().read_dir().unwrap().next();
-        assert!(
-            n.is_some(),
-            "expected extracted zipfile to have at least one file"
-        );
-
-        assert_eq!(n.unwrap().unwrap().file_name(), "hello_world.txt");
-    }
-
-    #[test]
-    fn test_extract_tarball() {
-        let mut header = tar::Header::new_gnu();
-        let fd = b"this is foo file";
-        header.set_path("foo.txt").unwrap();
-        header.set_size(fd.len().try_into().unwrap());
-        header.set_cksum();
-
-        let compressor = GzEncoder::new(Vec::new(), Compression::default());
-        let mut ar = tar::Builder::new(compressor);
-        ar.append(&header, fd.as_slice()).unwrap();
-        let compressed_data = ar.into_inner().unwrap().finish().unwrap();
-
-        let mut file = tempfile().unwrap();
-        file.write_all(compressed_data.as_slice()).unwrap();
-
-        let dir = unpack_tarball(file).unwrap();
-        let n = dir.path().read_dir().unwrap().next();
-        assert!(
-            n.is_some(),
-            "expected unpacked tarball to have at least one file"
-        );
-
-        assert_eq!(n.unwrap().unwrap().file_name(), "foo.txt");
+    if ends_with {
+        extract_tarball(response)
+    } else {
+        extract_zipfile(response)
     }
 }
