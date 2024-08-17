@@ -1,3 +1,4 @@
+---
 name: Rust CI
 
 on:
@@ -79,7 +80,9 @@ jobs:
           YARA_LIBRARY_PATH: ${{ github.workspace }}/.yara/${{ needs.yara.outputs.library-path }}
 
   test:
-    needs: [yara, yara-output]
+    needs:
+      - yara
+      - yara-output
 
     strategy:
       matrix:
@@ -111,11 +114,12 @@ jobs:
         run: cargo test --no-fail-fast
 
   docs-build:
-    needs: [yara]
+    needs:
+      - yara
     runs-on: ubuntu-22.04
 
     steps:
-      - name: "Checkout repository"
+      - name: Checkout repository
         uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332  # v4.1.7
 
       - name: Cache dependencies
@@ -129,7 +133,7 @@ jobs:
           name: ${{ needs.yara.outputs.artifacts }}
           path: .yara
 
-      - name: "Build docs with cargo"
+      - name: Build docs with cargo
         run: cargo doc --no-deps --document-private-items
         env:
           YARA_INCLUDE_DIR: ${{ github.workspace }}/.yara/${{ needs.yara.outputs.include-dir }}
@@ -137,17 +141,17 @@ jobs:
 
       # `.lock` is set to to rw-------, which causes actions/deploy-pages to fail
       # because it's expecting all files to be at least rw-r--r--
-      - name: "Remove '.lock' file"
+      - name: Remove '.lock' file
         run: rm ./target/doc/.lock
 
       # Commented out to test mdbook
       #
       # `cargo doc` builds the docs without a top level `index.html`, so add
       # a barebones one to redirect to the generated one.
-      #- name: "Add redirect index.html"
-      #  run: echo '<meta http-equiv="refresh" content="0; url=dragonfly_client_rs">' > target/doc/index.html
+      # - name: "Add redirect index.html"
+      #   run: echo '<meta http-equiv="refresh" content="0; url=dragonfly_client_rs">' > target/doc/index.html
 
-      - name: "Upload artifact"
+      - name: Upload artifact
         uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa  # v3.0.1
         with:
           path: ./target/doc

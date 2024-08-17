@@ -1,9 +1,7 @@
 # dragonfly-client-rs
 
-`dragonfly-client-rs` uses [Yara](https://virustotal.github.io/yara/) to scan
-code pulled from the [Python Package Index](https://pypi.org/) (PYPI). It polls
-for work from
-[`dragonfly-mainframe`](https://github.com/vipyrsec/dragonfly-mainframe).
+`dragonfly-client-rs` uses [Yara](https://virustotal.github.io/yara/) to scan code pulled from the [Python Package
+Index](https://pypi.org/) (PYPI). It polls for work from [`dragonfly-mainframe`](https://github.com/vipyrsec/dragonfly-mainframe).
 
 ## Running `dragonfly-client-rs`
 
@@ -19,16 +17,14 @@ for work from
 docker compose up
 ```
 
-Note: to build and run without Docker Compose, see [build
-locally](docs/building_locally.md).
+Note: to build and run without Docker Compose, see [build locally](docs/building_locally.md).
 
 ### Environment variables
 
-Variables without a default are **required**. For more information on how to
-use these, see [tuning](docs/tuning.md).
+Variables without a default are **required**. For more information on how to use these, see [tuning](docs/tuning.md).
 
 | Variable                  | Default                          | Description                                  |
-|---------------------------|----------------------------------|----------------------------------------------|
+| ------------------------- | -------------------------------- | -------------------------------------------- |
 | `DRAGONFLY_BASE_URL`      | `https://dragonfly.vipyrsec.com` | The base API URL for the mainframe server    |
 | `DRAGONFLY_AUTH0_DOMAIN`  | `vipyrsec.us.auth0.com`          | The auth0 domain that requests go to         |
 | `DRAGONFLY_AUDIENCE`      | `https://dragonfly.vipyrsec.com` | Auth0 Audience field                         |
@@ -41,9 +37,8 @@ use these, see [tuning](docs/tuning.md).
 
 ## Building docs locally
 
-We use [`mdbook`](https://rust-lang.github.io/mdBook/index.html) for docs as
-well as [`cargo doc`](https://doc.rust-lang.org/cargo/commands/cargo-doc.html).
-The easiest way to build locally:
+We use [`mdbook`](https://rust-lang.github.io/mdBook/index.html) for docs as well as [`cargo
+doc`](https://doc.rust-lang.org/cargo/commands/cargo-doc.html). The easiest way to build locally:
 
-* For `docs/`: `mdbook serve`
-* For doc comments: `cargo doc --document-private-items --no-deps`
+- For `docs/`: `mdbook serve`
+- For doc comments: `cargo doc --document-private-items --no-deps`

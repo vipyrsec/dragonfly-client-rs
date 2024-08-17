@@ -3,8 +3,10 @@ name: Container Build and Push
 
 on:
   push:
-    branches: [main]
-    tags: [v*]
+    branches:
+      - main
+    tags:
+      - v*
   pull_request:
 
 permissions:
@@ -30,7 +32,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        platform: [linux/amd64]
+        platform:
+          - linux/amd64
 
     runs-on: ubuntu-22.04
     steps:
@@ -138,7 +141,8 @@ jobs:
 
   merge:
     if: ${{ github.ref == 'refs/heads/main' || startswith(github.event.ref, 'refs/tags/v') }}
-    needs: [build-push]
+    needs:
+      - build-push
 
     runs-on: ubuntu-22.04
     steps:
@@ -173,12 +177,13 @@ jobs:
       - name: Create manifest list and push
         shell: bash
         working-directory: /tmp/digests
-        run: |
+        run: >
           docker buildx imagetools create \
             $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "${DOCKER_METADATA_OUTPUT_JSON}") \
             $(printf ' ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@sha256:%s ' *)
 
       - name: Inspect image
         shell: bash
-        run: |-
-          docker buildx imagetools inspect '${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.docker_meta.outputs.version }}'
+        run: >-
+          docker buildx imagetools inspect \
+            '${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.docker_meta.outputs.version }}'
