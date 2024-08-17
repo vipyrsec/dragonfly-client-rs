@@ -23,8 +23,10 @@ struct Distribution {
 impl Distribution {
     fn scan(&mut self, rules: &Rules) -> Result<DistributionScanResults> {
         let mut file_scan_results: Vec<FileScanResult> = Vec::new();
-        for entry in WalkDir::new(self.dir.path()) {
-            let entry = entry?;
+        for entry in WalkDir::new(self.dir.path())
+            .into_iter()
+            .filter_map(|dirent| dirent.into_iter().find(|de| de.file_type().is_file()))
+        {
             let file_scan_result = self.scan_file(entry.path(), rules)?;
             file_scan_results.push(file_scan_result);
         }
@@ -249,7 +251,7 @@ mod tests {
         ScanResultSerializer, SubmitJobResultsError, SubmitJobResultsSuccess,
     };
     use crate::test::make_file_scan_result;
-    use tempfile::tempdir;
+    use tempfile::{tempdir, tempdir_in};
 
     #[test]
     fn test_scan_result_success_serialization() {
@@ -472,5 +474,37 @@ mod tests {
         let result = distro.relative_to_archive_root(input_path).unwrap();
 
         assert_eq!(expected_path, result);
+    }
+
+    #[test]
+    fn scan_skips_directories() {
+        let rules = r#"
+            rule contains_rust {
+                meta:
+                    weight = 5
+                strings:
+                    $rust = "rust" nocase
+                condition:
+                    $rust
+            }
+        "#;
+
+        let compiler = Compiler::new().unwrap().add_rules_str(rules).unwrap();
+
+        let rules = compiler.compile_rules().unwrap();
+        let tempdir = tempdir().unwrap();
+        let _subtempdir = tempdir_in(tempdir.path()).unwrap();
+        let mut tempfile = tempfile::NamedTempFile::new_in(tempdir.path()).unwrap();
+        writeln!(&mut tempfile, "rust").unwrap();
+
+        let mut distro = super::Distribution {
+            dir: tempdir,
+            download_url: "https://example.com".parse().unwrap(),
+            inspector_url: "https://example.com".parse().unwrap(),
+        };
+
+        let results = distro.scan(&rules).unwrap();
+
+        assert_eq!(results.distro_scan_results.files.len(), 1);
     }
 }
