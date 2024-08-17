@@ -25,7 +25,7 @@ impl Distribution {
         let mut file_scan_results: Vec<FileScanResult> = Vec::new();
         for entry in WalkDir::new(self.dir.path()) {
             let entry = entry?;
-            let file_scan_result = scan_file(entry.path(), rules)?;
+            let file_scan_result = self.scan_file(entry.path(), rules)?;
             file_scan_results.push(file_scan_result);
         }
 
@@ -34,6 +34,36 @@ impl Distribution {
             self.inspector_url.clone(),
             &self.download_url,
         ))
+    }
+
+    /// Scan a file given it's path, and compiled rules.
+    ///
+    /// # Arguments
+    /// * `path` - The path of the file to scan.
+    /// * `rules` - The compiled rule set to scan this file against
+    fn scan_file(&self, path: &Path, rules: &Rules) -> Result<FileScanResult> {
+        let rules = rules
+            .scan_file(path, 10)?
+            .into_iter()
+            .filter(|rule| {
+                let filetypes = rule.get_filetypes();
+                filetypes.is_empty()
+                    || filetypes
+                        .iter()
+                        .any(|filetype| path.to_string_lossy().ends_with(filetype))
+            })
+            .collect();
+
+        Ok(FileScanResult::new(
+            self.relative_to_archive_root(path)?,
+            rules,
+        ))
+    }
+
+    /// Make the path relative to the archive root
+    fn relative_to_archive_root(&self, path: &Path) -> Result<std::path::PathBuf> {
+        // Use strip prefix to remove the tempdir path, then skip the archive dir
+        Ok(path.strip_prefix(self.dir.path())?.iter().skip(1).collect())
     }
 }
 
@@ -206,39 +236,20 @@ pub fn scan_all_distributions(
     Ok(distribution_scan_results)
 }
 
-/// Scan a file given it's path, and compiled rules.
-///
-/// # Arguments
-/// * `path` - The path of the file to scan.
-/// * `rules` - The compiled rule set to scan this file against
-fn scan_file(path: &Path, rules: &Rules) -> Result<FileScanResult> {
-    let rules = rules
-        .scan_file(path, 10)?
-        .into_iter()
-        .filter(|rule| {
-            let filetypes = rule.get_filetypes();
-            filetypes.is_empty()
-                || filetypes
-                    .iter()
-                    .any(|filetype| path.to_string_lossy().ends_with(filetype))
-        })
-        .collect();
-
-    Ok(FileScanResult::new(path.to_path_buf(), rules))
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::io::Write;
     use std::{collections::HashSet, path::PathBuf};
     use yara::Compiler;
 
-    use super::{scan_file, DistributionScanResults, PackageScanResults};
+    use super::{DistributionScanResults, PackageScanResults};
     use crate::client::{
         DistributionScanResult, Match, MetadataValue, PatternMatch, Range, RuleMatch,
         ScanResultSerializer, SubmitJobResultsError, SubmitJobResultsSuccess,
     };
     use crate::test::make_file_scan_result;
+    use tempfile::tempdir;
 
     #[test]
     fn test_scan_result_success_serialization() {
@@ -406,9 +417,25 @@ mod tests {
 
         let rules = compiler.compile_rules().unwrap();
 
-        let result = scan_file(&PathBuf::default(), &rules).unwrap();
+        let tempdir = tempdir().unwrap();
+        let archive_root = tempfile::Builder::new().tempdir_in(tempdir.path()).unwrap();
 
-        assert_eq!(result.path, PathBuf::default());
+        let mut tmpfile = tempfile::NamedTempFile::new_in(archive_root.path()).unwrap();
+
+        writeln!(&mut tmpfile, "I hate Rust >:(").unwrap();
+
+        let distro = super::Distribution {
+            dir: tempdir,
+            download_url: "https://example.com".parse().unwrap(),
+            inspector_url: "https://example.com".parse().unwrap(),
+        };
+
+        let result = distro.scan_file(tmpfile.path(), &rules).unwrap();
+
+        assert_eq!(
+            result.path,
+            tmpfile.path().strip_prefix(archive_root.path()).unwrap()
+        );
         assert_eq!(
             RuleMatch {
                 identifier: "contains_rust".to_string(),
@@ -427,5 +454,23 @@ mod tests {
         );
 
         assert_eq!(result.calculate_score(), 5);
+    }
+
+    #[test]
+    fn test_relative_to_archive_root() {
+        let tempdir = tempdir().unwrap();
+
+        let input_path = &tempdir.path().join("package-name").join("README.md");
+        let expected_path = PathBuf::from("README.md");
+
+        let distro = super::Distribution {
+            dir: tempdir,
+            download_url: "https://example.com".parse().unwrap(),
+            inspector_url: "https://example.com".parse().unwrap(),
+        };
+
+        let result = distro.relative_to_archive_root(input_path).unwrap();
+
+        assert_eq!(expected_path, result);
     }
 }
