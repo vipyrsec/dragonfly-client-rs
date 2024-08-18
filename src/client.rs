@@ -170,10 +170,10 @@ fn extract_zipfile<R: io::Read>(mut response: R) -> Result<TempDir> {
 
 pub fn download_distribution(http_client: &Client, download_url: Url) -> Result<TempDir> {
     // This conversion is fast as per the docs
-    let ends_with = download_url.as_str().ends_with(".tar.gz");
+    let is_tarball = download_url.as_str().ends_with(".tar.gz");
     let response = http_client.get(download_url).send()?;
 
-    if ends_with {
+    if is_tarball {
         extract_tarball(response)
     } else {
         extract_zipfile(response)
