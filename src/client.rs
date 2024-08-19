@@ -2,24 +2,15 @@ mod methods;
 mod models;
 
 use chrono::{DateTime, TimeDelta, Utc};
+use flate2::read::GzDecoder;
 pub use methods::*;
 pub use models::*;
+use tempfile::{tempdir, tempfile, TempDir};
 
-use crate::APP_CONFIG;
 use color_eyre::Result;
-use flate2::read::GzDecoder;
 use reqwest::{blocking::Client, Url};
-use std::{
-    io::{Cursor, Read},
-    time::Duration,
-};
+use std::{io, time::Duration};
 use tracing::{error, info, trace, warn};
-
-/// Type alias representing a tar archive
-pub type TarballType = tar::Archive<Cursor<Vec<u8>>>;
-
-/// Type alias representing a zip archive
-pub type ZipType = zip::ZipArchive<Cursor<Vec<u8>>>;
 
 pub struct AuthState {
     pub access_token: String,
@@ -154,25 +145,37 @@ impl DragonflyClient {
     }
 }
 
-pub fn fetch_tarball(http_client: &Client, download_url: &Url) -> Result<TarballType> {
-    let response = http_client.get(download_url.clone()).send()?;
-
-    let decompressed = GzDecoder::new(response);
-    let mut cursor: Cursor<Vec<u8>> = Cursor::new(Vec::new());
-    decompressed
-        .take(APP_CONFIG.max_scan_size)
-        .read_to_end(cursor.get_mut())?;
-
-    Ok(tar::Archive::new(cursor))
+/// Download and unpack a tarball, return the [`TempDir`] containing the contents.
+fn extract_tarball<R: io::Read>(response: R) -> Result<TempDir> {
+    let mut tarball = tar::Archive::new(GzDecoder::new(response));
+    let tmpdir = tempdir()?;
+    tarball.unpack(tmpdir.path())?;
+    Ok(tmpdir)
 }
 
-pub fn fetch_zipfile(http_client: &Client, download_url: &Url) -> Result<ZipType> {
-    let response = http_client.get(download_url.to_string()).send()?;
+/// Download and extract a zip, return the [`TempDir`] containing the contents.
+fn extract_zipfile<R: io::Read>(mut response: R) -> Result<TempDir> {
+    let mut file = tempfile()?;
 
-    let mut cursor = Cursor::new(Vec::new());
-    response
-        .take(APP_CONFIG.max_scan_size)
-        .read_to_end(cursor.get_mut())?;
+    // first write the archive to a file because `response` isn't Seek, which is needed by
+    // `zip::ZipArchive::new`
+    io::copy(&mut response, &mut file)?;
 
-    Ok(zip::ZipArchive::new(cursor)?)
+    let mut zip = zip::ZipArchive::new(file)?;
+    let tmpdir = tempdir()?;
+    zip.extract(tmpdir.path())?;
+
+    Ok(tmpdir)
+}
+
+pub fn download_distribution(http_client: &Client, download_url: Url) -> Result<TempDir> {
+    // This conversion is fast as per the docs
+    let is_tarball = download_url.as_str().ends_with(".tar.gz");
+    let response = http_client.get(download_url).send()?;
+
+    if is_tarball {
+        extract_tarball(response)
+    } else {
+        extract_zipfile(response)
+    }
 }
