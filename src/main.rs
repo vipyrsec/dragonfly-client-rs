@@ -4,9 +4,6 @@ mod exts;
 mod scanner;
 mod utils;
 
-#[cfg(test)]
-mod test;
-
 use std::time::Duration;
 
 use client::DragonflyClient;

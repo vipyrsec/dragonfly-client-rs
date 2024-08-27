@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::{collections::HashSet, path::Path};
 
 use color_eyre::Result;
@@ -6,18 +7,40 @@ use tempfile::TempDir;
 use walkdir::WalkDir;
 use yara::Rules;
 
-use crate::client::DistributionScanResult;
 use crate::{
-    client::{download_distribution, FileScanResult, Job, SubmitJobResultsSuccess},
+    client::{download_distribution, Job, SubmitJobResultsSuccess},
     exts::RuleExt,
     utils::create_inspector_url,
 };
+
+#[derive(Debug, Hash, Eq, PartialEq, Clone)]
+pub struct RuleScore {
+    pub name: String,
+    pub score: i64,
+}
+
+/// The results of scanning a single file. Contains the file path and the rules it matched
+#[derive(Debug)]
+pub struct FileScanResult {
+    pub path: PathBuf,
+    pub rules: Vec<RuleScore>,
+}
+
+impl FileScanResult {
+    fn new(path: PathBuf, rules: Vec<RuleScore>) -> Self {
+        Self { path, rules }
+    }
+
+    /// Returns the total score of all matched rules.
+    fn calculate_score(&self) -> i64 {
+        self.rules.iter().map(|i| i.score).sum()
+    }
+}
 
 /// A distribution consisting of an archive and an inspector url.
 struct Distribution {
     dir: TempDir,
     inspector_url: Url,
-    download_url: Url,
 }
 
 impl Distribution {
@@ -34,7 +57,6 @@ impl Distribution {
         Ok(DistributionScanResults::new(
             file_scan_results,
             self.inspector_url.clone(),
-            &self.download_url,
         ))
     }
 
@@ -54,6 +76,7 @@ impl Distribution {
                         .iter()
                         .any(|filetype| path.to_string_lossy().ends_with(filetype))
             })
+            .map(RuleScore::from)
             .collect();
 
         Ok(FileScanResult::new(
@@ -63,7 +86,7 @@ impl Distribution {
     }
 
     /// Make the path relative to the archive root
-    fn relative_to_archive_root(&self, path: &Path) -> Result<std::path::PathBuf> {
+    fn relative_to_archive_root(&self, path: &Path) -> Result<PathBuf> {
         // Use strip prefix to remove the tempdir path, then skip the archive dir
         Ok(path.strip_prefix(self.dir.path())?.iter().skip(1).collect())
     }
@@ -73,7 +96,7 @@ impl Distribution {
 #[derive(Debug)]
 pub struct DistributionScanResults {
     /// The scan results for each file in this distribution
-    distro_scan_results: DistributionScanResult,
+    file_scan_results: Vec<FileScanResult>,
 
     /// The inspector URL pointing to this distribution's base
     inspector_url: Url,
@@ -82,26 +105,11 @@ pub struct DistributionScanResults {
 impl DistributionScanResults {
     /// Create a new `DistributionScanResults` based off the results of its files and the base
     /// inspector URL for this distribution.
-    pub fn new(
-        file_scan_results: Vec<FileScanResult>,
-        inspector_url: Url,
-        download_url: &Url,
-    ) -> Self {
+    pub fn new(file_scan_results: Vec<FileScanResult>, inspector_url: Url) -> Self {
         Self {
+            file_scan_results,
             inspector_url,
-            distro_scan_results: DistributionScanResult::new(
-                download_url.to_string(),
-                file_scan_results,
-            ),
         }
-    }
-
-    pub fn get_total_score(&self) -> i64 {
-        self.distro_scan_results
-            .files
-            .iter()
-            .map(FileScanResult::calculate_score)
-            .sum()
     }
 
     /// Get the "most malicious file" in the distribution.
@@ -109,29 +117,33 @@ impl DistributionScanResults {
     /// This file with the greatest score is considered the most malicious. If multiple
     /// files have the same score, an arbitrary file is picked.
     pub fn get_most_malicious_file(&self) -> Option<&FileScanResult> {
-        self.distro_scan_results
-            .files
+        self.file_scan_results
             .iter()
             .max_by_key(|i| i.calculate_score())
     }
 
-    /// Get all **unique** `RuleMatch` objects that were matched for this distribution
-    fn get_matched_rules(&self) -> HashSet<(&str, i64)> {
-        let mut rules = HashSet::new();
-        for file_scan_result in &self.distro_scan_results.files {
-            for match_ in &file_scan_result.matches {
-                rules.insert((match_.identifier.as_str(), match_.score()));
+    /// Get all **unique** `RuleScore` objects that were matched for this distribution
+    fn get_matched_rules(&self) -> HashSet<&RuleScore> {
+        let mut rules: HashSet<&RuleScore> = HashSet::new();
+        for file_scan_result in &self.file_scan_results {
+            for rule in &file_scan_result.rules {
+                rules.insert(rule);
             }
         }
 
         rules
     }
 
+    /// Calculate the total score of this distribution, without counting duplicates twice
+    pub fn get_total_score(&self) -> i64 {
+        self.get_matched_rules().iter().map(|rule| rule.score).sum()
+    }
+
     /// Get a vector of the **unique** rule identifiers this distribution matched
     pub fn get_matched_rule_identifiers(&self) -> Vec<&str> {
         self.get_matched_rules()
             .iter()
-            .map(|&rule| rule.0)
+            .map(|rule| rule.name.as_str())
             .collect()
     }
 
@@ -171,7 +183,7 @@ impl PackageScanResults {
     }
 
     /// Format the package scan results into something that can be sent over the API
-    pub fn build_body(self) -> SubmitJobResultsSuccess {
+    pub fn build_body(&self) -> SubmitJobResultsSuccess {
         let highest_score_distribution = self
             .distribution_scan_results
             .iter()
@@ -195,18 +207,12 @@ impl PackageScanResults {
             .collect();
 
         SubmitJobResultsSuccess {
-            name: self.name,
-            version: self.version,
+            name: self.name.clone(),
+            version: self.version.clone(),
             score,
             inspector_url,
             rules_matched,
-            commit: self.commit_hash,
-            distributions: self
-                .distribution_scan_results
-                .into_iter()
-                .map(|dsr| dsr.distro_scan_results)
-                .filter(|dsr| !dsr.files.is_empty())
-                .collect(),
+            commit: self.commit_hash.clone(),
         }
     }
 }
@@ -226,11 +232,7 @@ pub fn scan_all_distributions(
 
         let dir = download_distribution(http_client, download_url.clone())?;
 
-        let mut dist = Distribution {
-            dir,
-            inspector_url,
-            download_url,
-        };
+        let mut dist = Distribution { dir, inspector_url };
         let distribution_scan_result = dist.scan(rules)?;
         distribution_scan_results.push(distribution_scan_result);
     }
@@ -240,18 +242,15 @@ pub fn scan_all_distributions(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use super::{DistributionScanResults, PackageScanResults};
+    use crate::{
+        client::{ScanResultSerializer, SubmitJobResultsError, SubmitJobResultsSuccess},
+        scanner::{FileScanResult, RuleScore},
+    };
     use std::io::Write;
     use std::{collections::HashSet, path::PathBuf};
-    use yara::Compiler;
-
-    use super::{DistributionScanResults, PackageScanResults};
-    use crate::client::{
-        DistributionScanResult, Match, MetadataValue, PatternMatch, Range, RuleMatch,
-        ScanResultSerializer, SubmitJobResultsError, SubmitJobResultsSuccess,
-    };
-    use crate::test::make_file_scan_result;
     use tempfile::{tempdir, tempdir_in};
+    use yara::Compiler;
 
     #[test]
     fn test_scan_result_success_serialization() {
@@ -262,12 +261,11 @@ mod tests {
             inspector_url: Some("inspector url".into()),
             rules_matched: vec!["abc".into(), "def".into()],
             commit: "commit hash".into(),
-            distributions: Vec::new(),
         };
 
         let scan_result: ScanResultSerializer = Ok(success).into();
         let actual = serde_json::to_string(&scan_result).unwrap();
-        let expected = r#"{"name":"test","version":"1.0.0","score":10,"inspector_url":"inspector url","rules_matched":["abc","def"],"commit":"commit hash","distributions":[]}"#;
+        let expected = r#"{"name":"test","version":"1.0.0","score":10,"inspector_url":"inspector url","rules_matched":["abc","def"],"commit":"commit hash"}"#;
 
         assert_eq!(actual, expected);
     }
@@ -288,48 +286,139 @@ mod tests {
     }
 
     #[test]
+    fn test_file_score() {
+        let rules = vec![
+            RuleScore {
+                name: String::from("rule1"),
+                score: 5,
+            },
+            RuleScore {
+                name: String::from("rule2"),
+                score: 7,
+            },
+        ];
+
+        let file_scan_result = FileScanResult {
+            path: PathBuf::default(),
+            rules,
+        };
+        assert_eq!(file_scan_result.calculate_score(), 12);
+    }
+
+    #[test]
     fn test_get_most_malicious_file() {
         let file_scan_results = vec![
-            make_file_scan_result("/a", &[("rule1", 5)]),
-            make_file_scan_result("/b", &[("rule2", 7)]),
-            make_file_scan_result("/c", &[("rule3", 4)]),
+            FileScanResult {
+                path: PathBuf::default(),
+                rules: vec![RuleScore {
+                    name: String::from("rule1"),
+                    score: 5,
+                }],
+            },
+            FileScanResult {
+                path: PathBuf::default(),
+                rules: vec![RuleScore {
+                    name: String::from("rule2"),
+                    score: 7,
+                }],
+            },
+            FileScanResult {
+                path: PathBuf::default(),
+                rules: vec![RuleScore {
+                    name: String::from("rule3"),
+                    score: 4,
+                }],
+            },
         ];
 
         let distribution_scan_results = DistributionScanResults {
-            distro_scan_results: DistributionScanResult::new("e".into(), file_scan_results),
+            file_scan_results,
             inspector_url: reqwest::Url::parse("https://example.net").unwrap(),
         };
 
         assert_eq!(
-            "rule2",
             distribution_scan_results
                 .get_most_malicious_file()
                 .unwrap()
-                .matches[0]
-                .identifier
-        )
+                .rules[0]
+                .name,
+            "rule2"
+        );
     }
 
     #[test]
     fn test_get_matched_rules() {
         let file_scan_results = vec![
-            make_file_scan_result("/a", &[("rule1", 5), ("rule2", 7)]),
-            make_file_scan_result("/b", &[("rule2", 7), ("rule3", 9)]),
-            make_file_scan_result("/c", &[("rule3", 9), ("rule4", 6)]),
+            FileScanResult {
+                path: PathBuf::default(),
+                rules: vec![
+                    RuleScore {
+                        name: String::from("rule1"),
+                        score: 5,
+                    },
+                    RuleScore {
+                        name: String::from("rule2"),
+                        score: 7,
+                    },
+                ],
+            },
+            FileScanResult {
+                path: PathBuf::default(),
+                rules: vec![
+                    RuleScore {
+                        name: String::from("rule2"),
+                        score: 7,
+                    },
+                    RuleScore {
+                        name: String::from("rule3"),
+                        score: 9,
+                    },
+                ],
+            },
+            FileScanResult {
+                path: PathBuf::default(),
+                rules: vec![
+                    RuleScore {
+                        name: String::from("rule3"),
+                        score: 9,
+                    },
+                    RuleScore {
+                        name: String::from("rule4"),
+                        score: 6,
+                    },
+                ],
+            },
         ];
 
         let distribution_scan_results = DistributionScanResults {
-            distro_scan_results: DistributionScanResult::new("e".into(), file_scan_results),
+            file_scan_results,
             inspector_url: reqwest::Url::parse("https://example.net").unwrap(),
         };
 
-        let matched_rules: HashSet<(&str, i64)> = distribution_scan_results
+        let matched_rules: HashSet<RuleScore> = distribution_scan_results
             .get_matched_rules()
             .into_iter()
+            .cloned()
             .collect();
 
-        let expected_rules =
-            HashSet::from([("rule1", 5), ("rule2", 7), ("rule3", 9), ("rule4", 6)]);
+        let expected_rules = HashSet::from([
+            RuleScore {
+                name: String::from("rule1"),
+                score: 5,
+            },
+            RuleScore {
+                name: String::from("rule2"),
+                score: 7,
+            },
+            RuleScore {
+                name: String::from("rule3"),
+                score: 9,
+            },
+            RuleScore {
+                name: String::from("rule4"),
+                score: 6,
+            },
+        ]);
 
         assert_eq!(matched_rules, expected_rules);
     }
@@ -337,13 +426,49 @@ mod tests {
     #[test]
     fn test_get_matched_rule_identifiers() {
         let file_scan_results = vec![
-            make_file_scan_result("/a", &[("rule1", 5), ("rule2", 7)]),
-            make_file_scan_result("/b", &[("rule2", 7), ("rule3", 9)]),
-            make_file_scan_result("/c", &[("rule3", 9), ("rule4", 6)]),
+            FileScanResult {
+                path: PathBuf::default(),
+                rules: vec![
+                    RuleScore {
+                        name: String::from("rule1"),
+                        score: 5,
+                    },
+                    RuleScore {
+                        name: String::from("rule2"),
+                        score: 7,
+                    },
+                ],
+            },
+            FileScanResult {
+                path: PathBuf::default(),
+                rules: vec![
+                    RuleScore {
+                        name: String::from("rule2"),
+                        score: 7,
+                    },
+                    RuleScore {
+                        name: String::from("rule3"),
+                        score: 9,
+                    },
+                ],
+            },
+            FileScanResult {
+                path: PathBuf::default(),
+                rules: vec![
+                    RuleScore {
+                        name: String::from("rule3"),
+                        score: 9,
+                    },
+                    RuleScore {
+                        name: String::from("rule4"),
+                        score: 6,
+                    },
+                ],
+            },
         ];
 
         let distribution_scan_results = DistributionScanResults {
-            distro_scan_results: DistributionScanResult::new("e".into(), file_scan_results),
+            file_scan_results,
             inspector_url: reqwest::Url::parse("https://example.net").unwrap(),
         };
 
@@ -360,20 +485,44 @@ mod tests {
     #[test]
     fn test_build_package_scan_results_body() {
         let file_scan_results1 = vec![
-            make_file_scan_result("/a", &[("rule1", 5)]),
-            make_file_scan_result("/b", &[("rule2", 7)]),
+            FileScanResult {
+                path: PathBuf::default(),
+                rules: vec![RuleScore {
+                    name: String::from("rule1"),
+                    score: 5,
+                }],
+            },
+            FileScanResult {
+                path: PathBuf::default(),
+                rules: vec![RuleScore {
+                    name: String::from("rule2"),
+                    score: 7,
+                }],
+            },
         ];
         let distribution_scan_results1 = DistributionScanResults {
-            distro_scan_results: DistributionScanResult::new("e".into(), file_scan_results1),
+            file_scan_results: file_scan_results1,
             inspector_url: reqwest::Url::parse("https://example.net/distrib1.tar.gz").unwrap(),
         };
 
         let file_scan_results2 = vec![
-            make_file_scan_result("/c", &[("rule3", 2)]),
-            make_file_scan_result("/d", &[("rule4", 9)]),
+            FileScanResult {
+                path: PathBuf::default(),
+                rules: vec![RuleScore {
+                    name: String::from("rule3"),
+                    score: 2,
+                }],
+            },
+            FileScanResult {
+                path: PathBuf::default(),
+                rules: vec![RuleScore {
+                    name: String::from("rule4"),
+                    score: 9,
+                }],
+            },
         ];
         let distribution_scan_results2 = DistributionScanResults {
-            distro_scan_results: DistributionScanResult::new("e".into(), file_scan_results2),
+            file_scan_results: file_scan_results2,
             inspector_url: reqwest::Url::parse("https://example.net/distrib2.whl").unwrap(),
         };
 
@@ -388,7 +537,7 @@ mod tests {
 
         assert_eq!(
             body.inspector_url,
-            Some(String::from("https://example.net/distrib1.tar.gz/b"))
+            Some(String::from("https://example.net/distrib1.tar.gz"))
         );
         assert_eq!(body.score, 12);
         assert_eq!(
@@ -428,7 +577,6 @@ mod tests {
 
         let distro = super::Distribution {
             dir: tempdir,
-            download_url: "https://example.com".parse().unwrap(),
             inspector_url: "https://example.com".parse().unwrap(),
         };
 
@@ -439,22 +587,12 @@ mod tests {
             tmpfile.path().strip_prefix(archive_root.path()).unwrap()
         );
         assert_eq!(
-            RuleMatch {
-                identifier: "contains_rust".to_string(),
-                patterns: vec![PatternMatch {
-                    identifier: "$rust".to_string(),
-                    matches: vec![Match {
-                        data: vec![b'R', b'u', b's', b't'],
-                        range: Range { start: 7, end: 10 }
-                    }]
-                }],
-                metadata: vec![("weight".to_string(), MetadataValue::Integer(5))]
-                    .into_iter()
-                    .collect::<HashMap<_, _>>(),
-            },
-            result.matches[0],
+            result.rules[0],
+            RuleScore {
+                name: "contains_rust".into(),
+                score: 5
+            }
         );
-
         assert_eq!(result.calculate_score(), 5);
     }
 
@@ -467,7 +605,6 @@ mod tests {
 
         let distro = super::Distribution {
             dir: tempdir,
-            download_url: "https://example.com".parse().unwrap(),
             inspector_url: "https://example.com".parse().unwrap(),
         };
 
@@ -499,12 +636,11 @@ mod tests {
 
         let mut distro = super::Distribution {
             dir: tempdir,
-            download_url: "https://example.com".parse().unwrap(),
             inspector_url: "https://example.com".parse().unwrap(),
         };
 
         let results = distro.scan(&rules).unwrap();
 
-        assert_eq!(results.distro_scan_results.files.len(), 1);
+        assert_eq!(results.file_scan_results.len(), 1);
     }
 }
