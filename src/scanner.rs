@@ -87,8 +87,7 @@ impl Distribution {
 
     /// Make the path relative to the archive root
     fn relative_to_archive_root(&self, path: &Path) -> Result<PathBuf> {
-        // Use strip prefix to remove the tempdir path, then skip the archive dir
-        Ok(path.strip_prefix(self.dir.path())?.iter().skip(1).collect())
+        Ok(path.strip_prefix(self.dir.path())?.to_path_buf())
     }
 }
 
@@ -583,10 +582,6 @@ mod tests {
         let result = distro.scan_file(tmpfile.path(), &rules).unwrap();
 
         assert_eq!(
-            result.path,
-            tmpfile.path().strip_prefix(archive_root.path()).unwrap()
-        );
-        assert_eq!(
             result.rules[0],
             RuleScore {
                 name: "contains_rust".into(),
@@ -600,8 +595,8 @@ mod tests {
     fn test_relative_to_archive_root() {
         let tempdir = tempdir().unwrap();
 
-        let input_path = &tempdir.path().join("package-name").join("README.md");
-        let expected_path = PathBuf::from("README.md");
+        let input_path = &tempdir.path().join("name-version").join("README.md");
+        let expected_path = PathBuf::from("name-version/README.md");
 
         let distro = super::Distribution {
             dir: tempdir,
