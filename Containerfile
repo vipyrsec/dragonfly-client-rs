@@ -1,9 +1,9 @@
-#syntax=docker/dockerfile:1.5
+# syntax=docker/dockerfile:1.9
 
 ARG DEBIAN_VERSION=bookworm
 ARG DEBIAN_VERSION_NUMBER=12
 ARG PROJECT=dragonfly-client-rs
-ARG RUST_VERSION=1.78
+ARG RUST_VERSION=1.80
 ARG RUSTFLAGS="-L/usr/local/lib"
 
 ARG YARA_VERSION=4.5.1
