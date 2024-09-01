@@ -44,7 +44,7 @@ jobs:
       - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332  # v4.1.7
 
       - name: Install cosign
-        uses: sigstore/cosign-installer@59acb6260d9c0ba8f4a2f9d9b48431a222b68e20  # v3.5.0
+        uses: sigstore/cosign-installer@4959ce089c160fddf62f7b42464195ba1a56d382  # v3.6.0
 
       - name: Setup Docker Buildx
         id: buildx
@@ -106,7 +106,7 @@ jobs:
 
       - name: Build and push Docker image
         id: docker_build_push
-        uses: docker/build-push-action@5176d81f87c23d6fc96624dfdbcd9f3830bbe445  # v6.5.0
+        uses: docker/build-push-action@5cd11c3a4ced054e52742c5fd54dca954e0edd85  # v6.7.0
         with:
           builder: ${{ steps.buildx.outputs.name }}
           build-args: |
@@ -147,7 +147,7 @@ jobs:
 
       - name: Upload digest
         if: ${{ github.ref == 'refs/heads/main' || startswith(github.event.ref, 'refs/tags/v') }}
-        uses: actions/upload-artifact@0b2256b8c012f0828dc542b3febcab082c67f72b  # v4.3.4
+        uses: actions/upload-artifact@50769540e7f4bd5e21e526ee35c689e35e0d6874  # v4.4.0
         with:
           if-no-files-found: error
           name: digests
