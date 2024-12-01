@@ -63,6 +63,7 @@ jobs:
             yara-${{ inputs.version }}/libyara/include/yara
             yara-${{ inputs.version }}/libyara/include/yara.h
             yara-${{ inputs.version }}/.libs/libyara*
+          include-hidden-files: true
           retention-days: 1
           overwrite: true
 
