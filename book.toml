@@ -1,0 +1,13 @@
+[book]
+authors = ["Vipyr Security"]
+language = "en"
+multilingual = false
+src = "docs"
+title = "Docs"
+description = "Documentation for the Dragonfly Client"
+
+[rust]
+edition = "2021"
+
+[build]
+build-dir = "target/book"
