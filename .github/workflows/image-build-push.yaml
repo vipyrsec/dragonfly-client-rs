@@ -1,5 +1,5 @@
 ---
-name: Container Build and Push
+name: Image Build and Push
 
 on:
   push:
@@ -77,13 +77,13 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
             type=edge
-            # FIXME: Remove explicit `latest` tag once we start tagging releases
+            # FIXME: Remove explicit `latest` tag, once we start tagging releases
             type=raw,value=latest,enable={{is_default_branch}}
             type=ref,event=tag
             type=sha,format=long
 
       - name: Inject Docker Build(x|Kit) cache mounts
-        uses: sid-maddy/buildkit-cache-dance/inject@b85212de35ab5f2a6f5cf0efcf9ffb3806dc56e7  # v1.0.0
+        uses: sid-maddy/buildkit-cache-dance/inject@cc79294360549b4d25e3c026b0a4b37576bba7c3  # v1
         with:
           cache-mounts: |
             cargo-registry,/usr/local/cargo/registry
@@ -97,10 +97,10 @@ jobs:
         id: rust-channel
         run: |
           python3 <<'EOF' >"${GITHUB_ENV}"
-          from tomllib import loads
+          import tomllib
           from pathlib import Path
 
-          rust_toolchain = loads(Path("./rust-toolchain.toml").read_text())
+          rust_toolchain = tomllib.loads(Path("./rust-toolchain.toml").read_text())
           print(f"RUST_VERSION={rust_toolchain["toolchain"]["channel"]}")
           EOF
 
@@ -120,7 +120,7 @@ jobs:
           tags: ${{ steps.docker_meta.outputs.tags }}
 
       - name: Extract Docker Build(x|Kit) cache mounts
-        uses: sid-maddy/buildkit-cache-dance/extract@b85212de35ab5f2a6f5cf0efcf9ffb3806dc56e7  # v1.0.0
+        uses: sid-maddy/buildkit-cache-dance/extract@cc79294360549b4d25e3c026b0a4b37576bba7c3  # v1
         with:
           cache-mounts: |
             cargo-registry,/usr/local/cargo/registry
