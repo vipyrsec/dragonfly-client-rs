@@ -10,7 +10,7 @@ repos:
       - id: check-useless-excludes
 
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: cef0300fd0fc4d2a87a85fa2093c6b283ea36f4b  # frozen: v5.0.0
+    rev: 3e8a8703264a2f4a69428a0aa4dcb512790b2c8c  # frozen: v6.0.0
     hooks:
       - id: check-added-large-files
       - id: check-merge-conflict
@@ -86,10 +86,11 @@ repos:
     hooks:
       - id: markdownlint-fix
 
-  - repo: https://github.com/ComPWA/mirrors-taplo
-    rev: 4ef242b660e0f7c7c953b9d8289e302c3f49bfbc  # frozen: v0.8.1
+  - repo: https://github.com/ComPWA/taplo-pre-commit
+    rev: 23eab0f0eedcbedebff420f5fdfb284744adc7b3  # frozen: v0.9.3
     hooks:
-      - id: taplo
+      - id: taplo-format
+      - id: taplo-lint
 
   - repo: https://github.com/sirwart/ripsecrets
     rev: 7d94620933e79b8acaa0cd9e60e9864b07673d86  # frozen: v0.1.11
@@ -97,7 +98,7 @@ repos:
       - id: ripsecrets
 
   - repo: https://github.com/crate-ci/typos
-    rev: 3d97dc5b9833a60a62e70d5b56af2cc7ddd522f6  # frozen: v1
+    rev: 229c2573318986f3b0f933e761508d23a13540d5  # frozen: v1
     hooks:
       - id: typos
         args: []
