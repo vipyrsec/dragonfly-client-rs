@@ -69,13 +69,12 @@ RUN --mount=type=cache,id=cargo-registry,target=/usr/local/cargo/registry \
 # debug The debug build
 FROM gcr.io/distroless/cc-debian$DEBIAN_VERSION_NUMBER:debug-nonroot AS debug
 ARG PROJECT
-ENV PROJECT="$PROJECT"
 
 WORKDIR /app
 
 COPY --from=build-debug "/app/$PROJECT" "./$PROJECT"
 
-ENTRYPOINT ["./$PROJECT"]
+ENTRYPOINT ["./dragonfly-client-rs"]
 
 # build-release The build stage for the release build
 FROM build-base AS build-release
@@ -101,10 +100,9 @@ RUN --mount=type=cache,id=cargo-registry,target=/usr/local/cargo/registry \
 # release The release build
 FROM gcr.io/distroless/cc-debian$DEBIAN_VERSION_NUMBER:nonroot AS release
 ARG PROJECT
-ENV PROJECT="$PROJECT"
 
 WORKDIR /app
 
 COPY --from=build-release "/app/$PROJECT" "./$PROJECT"
 
-ENTRYPOINT ["./$PROJECT"]
+ENTRYPOINT ["./dragonfly-client-rs"]
