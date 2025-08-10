@@ -4,7 +4,7 @@ use crate::scanner::RuleScore;
 
 pub trait RuleExt<'a> {
     /// Get the value of a metadata by key. `None` if that key/value pair doesn't exist
-    fn get_metadata_value(&'a self, key: &str) -> Option<&'a MetadataValue>;
+    fn get_metadata_value(&'a self, key: &str) -> Option<&'a MetadataValue<'a>>;
 
     /// Get the weight of this rule. `0` if no weight is defined.
     fn get_rule_weight(&'a self) -> i64;
@@ -14,7 +14,7 @@ pub trait RuleExt<'a> {
 }
 
 impl RuleExt<'_> for Rule<'_> {
-    fn get_metadata_value(&self, key: &str) -> Option<&'_ MetadataValue> {
+    fn get_metadata_value(&self, key: &str) -> Option<&'_ MetadataValue<'_>> {
         self.metadatas
             .iter()
             .find(|metadata| metadata.identifier == key)
