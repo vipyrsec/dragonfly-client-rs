@@ -1,8 +1,9 @@
+use std::sync::LazyLock;
+
 use figment::{
     providers::{Env, Format, Serialized, Toml},
     Figment,
 };
-use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize)]
@@ -57,4 +58,4 @@ impl AppConfig {
 }
 
 /// The global, immutable application configuration.
-pub static APP_CONFIG: Lazy<AppConfig> = Lazy::new(|| AppConfig::build().unwrap());
+pub static APP_CONFIG: LazyLock<AppConfig> = LazyLock::new(|| AppConfig::build().unwrap());
