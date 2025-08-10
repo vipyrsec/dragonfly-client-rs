@@ -46,6 +46,7 @@ impl Default for AppConfig {
 }
 
 impl AppConfig {
+    #[allow(clippy::result_large_err)]
     pub fn build() -> Result<AppConfig, figment::Error> {
         Figment::from(Serialized::defaults(AppConfig::default()))
             .merge(Toml::file("Config.toml"))
