@@ -28,6 +28,9 @@ defaults:
   run:
     shell: bash
 
+env:
+  YARA_VERSION: ${{ inputs.version }}
+
 permissions:
   contents: read
 
@@ -48,10 +51,10 @@ jobs:
           set -e
 
           curl -sL \
-              https://github.com/VirusTotal/yara/archive/refs/tags/v${{ inputs.version }}.tar.gz \
-              -o yara-${{ inputs.version }}.tar.gz
-          tar -xzf yara-${{ inputs.version }}.tar.gz
-          cd yara-${{ inputs.version }}
+              https://github.com/VirusTotal/yara/archive/refs/tags/v$YARA_VERSION.tar.gz \
+              -o yara-$YARA_VERSION.tar.gz
+          tar -xzf yara-$YARA_VERSION.tar.gz
+          cd yara-$YARA_VERSION
           ./bootstrap.sh
           ./configure
           make
