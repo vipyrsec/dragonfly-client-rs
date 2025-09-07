@@ -62,12 +62,12 @@ repos:
         pass_filenames: false
 
   - repo: https://github.com/python-jsonschema/check-jsonschema
-    rev: 54da05914997e6b04e4db33ed6757d744984c68b  # frozen: 0.33.2
+    rev: 9b9df9f1d3bd9a5e7a52d8f61a3be3e29e73d127  # frozen: 0.33.3
     hooks:
       - id: check-github-workflows
 
   - repo: https://github.com/lyz-code/yamlfix
-    rev: 8072181c0f2eab9f2dd8db2eb3b9556d7cd0bd74  # frozen: 1.17.0
+    rev: 881308160e4589cf886919438a3ed0acba42ea0e  # frozen: 1.18.0
     hooks:
       - id: yamlfix
         args:
@@ -106,7 +106,7 @@ repos:
       - id: ripsecrets
 
   - repo: https://github.com/crate-ci/typos
-    rev: 229c2573318986f3b0f933e761508d23a13540d5  # frozen: v1
+    rev: edb4e206047e89b93ebe08f1a2ccc3d581a70cc7  # frozen: v1
     hooks:
       - id: typos
         args: []
