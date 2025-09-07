@@ -11,11 +11,20 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
+defaults:
+  run:
+    shell: bash
+
+permissions:
+  contents: read
+
 jobs:
   lint:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+        with:
+          persist-credentials: false
 
       - uses: actions-rust-lang/setup-rust-toolchain@ac90e63697ac2784f4ecfe2964e1a285c304003a  # v1.14.1
         with:
@@ -43,7 +52,7 @@ jobs:
     steps:
       - name: Read Matrix Output
         id: read
-        uses: cloudposse/github-action-matrix-outputs-read@main
+        uses: cloudposse/github-action-matrix-outputs-read@33cac12fa9282a7230a418d859b93fdbc4f27b5a  # v1.0.0
         with:
           matrix-step-name: yara
 
@@ -56,6 +65,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+        with:
+          persist-credentials: false
 
       - name: Download YARA
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0  # v5.0.0
@@ -94,6 +105,8 @@ jobs:
     runs-on: ${{ matrix.triple.runs-on }}
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+        with:
+          persist-credentials: false
 
       - name: Download YARA
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0  # v5.0.0
@@ -119,6 +132,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+        with:
+          persist-credentials: false
 
       - uses: actions-rust-lang/setup-rust-toolchain@ac90e63697ac2784f4ecfe2964e1a285c304003a  # v1.14.1
         with:
@@ -157,9 +172,8 @@ jobs:
 
     if: github.ref == 'refs/heads/main'
 
-    # Sets permissions of the GITHUB_TOKEN to allow deployment to GitHub Pages
+    # Permissions needed to deploy to GitHub Pages.
     permissions:
-      contents: read
       pages: write
       id-token: write
 

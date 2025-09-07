@@ -96,6 +96,9 @@ repos:
     rev: 5fee7cc03a2498e0ce36a18f36dfb558a30a426c  # frozen: v1.12.1
     hooks:
       - id: zizmor
+        args:
+          - --no-progress  # https://github.com/zizmorcore/zizmor/issues/582
+          - --fix
 
   - repo: https://github.com/sirwart/ripsecrets
     rev: 7d94620933e79b8acaa0cd9e60e9864b07673d86  # frozen: v0.1.11

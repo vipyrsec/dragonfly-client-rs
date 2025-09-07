@@ -28,6 +28,9 @@ defaults:
   run:
     shell: bash
 
+permissions:
+  contents: read
+
 jobs:
   yara:
     runs-on: ${{ inputs.runs-on }}
@@ -77,7 +80,7 @@ jobs:
     steps:
       - name: Write Matrix Output
         id: write
-        uses: cloudposse/github-action-matrix-outputs-write@main
+        uses: cloudposse/github-action-matrix-outputs-write@ed06cf3a6bf23b8dce36d1cf0d63123885bb8375  # v1.0.0
         with:
           matrix-step-name: yara
           matrix-key: ${{ inputs.runs-on }}

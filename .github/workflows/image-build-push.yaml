@@ -9,15 +9,13 @@ on:
       - v*
   pull_request:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 defaults:
   run:
     shell: bash
-
-permissions:
-  contents: read
-  packages: write
-  # This is used to complete the identity challenge with sigstore/fulcio.
-  id-token: write
 
 env:
   # Use docker.io for Docker Hub if empty
@@ -25,12 +23,13 @@ env:
   # github.repository as <account>/<repo>
   IMAGE_NAME: ${{ github.repository }}
 
+permissions:
+  contents: read
+
 jobs:
   build-push:
     permissions:
-      contents: read
       packages: write
-      # This is used to complete the identity challenge with sigstore/fulcio.
       id-token: write
 
     strategy:
@@ -42,6 +41,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+        with:
+          persist-credentials: false
 
       - name: Install cosign
         uses: sigstore/cosign-installer@d58896d6a1865668819e1d91763c7751a165e159  # v3.9.2
@@ -96,7 +97,7 @@ jobs:
       - name: Read Rust channel
         id: rust-channel
         run: |
-          python3 <<'EOF' >"${GITHUB_ENV}"
+          python3 <<'EOF' >"$GITHUB_ENV"
           import tomllib
           from pathlib import Path
 
@@ -159,6 +160,9 @@ jobs:
     needs:
       - build-push
 
+    permissions:
+      packages: write
+
     runs-on: ubuntu-24.04
     steps:
       - name: Download digests
@@ -193,7 +197,7 @@ jobs:
         working-directory: /tmp/digests
         run: >
           docker buildx imagetools create \
-            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "${DOCKER_METADATA_OUTPUT_JSON}") \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
             $(printf ' ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@sha256:%s ' *)
 
       - name: Inspect image
