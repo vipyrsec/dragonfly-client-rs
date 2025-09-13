@@ -10,7 +10,7 @@ on:
         type: string
       version:
         description: YARA version
-        default: 4.3.1
+        default: 4.5.4
         required: false
         type: string
     outputs:
