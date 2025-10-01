@@ -26,7 +26,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: actions-rust-lang/setup-rust-toolchain@ac90e63697ac2784f4ecfe2964e1a285c304003a  # v1.14.1
+      - uses: actions-rust-lang/setup-rust-toolchain@02be93da58aa71fb456aa9c43b301149248829d8  # v1.15.1
         with:
           components: rustfmt
 
@@ -74,7 +74,7 @@ jobs:
           name: ${{ needs.yara.outputs.artifacts }}
           path: .yara
 
-      - uses: actions-rust-lang/setup-rust-toolchain@ac90e63697ac2784f4ecfe2964e1a285c304003a  # v1.14.1
+      - uses: actions-rust-lang/setup-rust-toolchain@02be93da58aa71fb456aa9c43b301149248829d8  # v1.15.1
         with:
           components: clippy
           cache-key: x86_64-unknown-linux-gnu
@@ -114,7 +114,7 @@ jobs:
           name: ${{ fromJson(needs.yara-output.outputs.result).artifacts[matrix.triple.runs-on] }}
           path: .yara
 
-      - uses: actions-rust-lang/setup-rust-toolchain@ac90e63697ac2784f4ecfe2964e1a285c304003a  # v1.14.1
+      - uses: actions-rust-lang/setup-rust-toolchain@02be93da58aa71fb456aa9c43b301149248829d8  # v1.15.1
         with:
           cache-key: ${{ matrix.triple.target }}
 
@@ -135,7 +135,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: actions-rust-lang/setup-rust-toolchain@ac90e63697ac2784f4ecfe2964e1a285c304003a  # v1.14.1
+      - uses: actions-rust-lang/setup-rust-toolchain@02be93da58aa71fb456aa9c43b301149248829d8  # v1.15.1
         with:
           cache-key: x86_64-unknown-linux-gnu
 
