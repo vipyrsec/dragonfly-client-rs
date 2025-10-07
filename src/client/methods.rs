@@ -1,35 +1,31 @@
 use super::{models, ScanResultSerializer};
 
-use crate::APP_CONFIG;
+use crate::{utils::get_jwt_exp, APP_CONFIG};
+use chrono::{DateTime, Utc};
 use reqwest::blocking::Client;
+use color_eyre::eyre::OptionExt;
 
-pub fn fetch_access_token(http_client: &Client) -> reqwest::Result<models::AuthResponse> {
-    let url = format!("https://{}/oauth/token", APP_CONFIG.auth0_domain);
-    let json_body = models::AuthBody {
-        client_id: &APP_CONFIG.client_id,
-        client_secret: &APP_CONFIG.client_secret,
-        audience: &APP_CONFIG.audience,
-        grant_type: &APP_CONFIG.grant_type,
-        username: &APP_CONFIG.username,
-        password: &APP_CONFIG.password,
-    };
-
-    http_client
-        .post(url)
-        .json(&json_body)
+pub fn perform_initial_authentication(http_client: &Client) -> color_eyre::Result<DateTime<Utc>> {
+    let response = http_client
+        .get(&APP_CONFIG.base_url)
+        .header("CF-Access-Client-Id", &APP_CONFIG.client_id)
+        .header("CF-Access-Client-Secret", &APP_CONFIG.client_secret)
         .send()?
-        .error_for_status()?
-        .json()
+        .error_for_status()?;
+
+    let cookie = response.cookies()
+        .find(|c| c.name() == "CF_Authorization")
+        .ok_or_eyre("Did not find CF_Authorization header in response")?;
+
+    get_jwt_exp(cookie.value())
 }
 
 pub fn fetch_bulk_job(
     http_client: &Client,
-    access_token: &str,
     n_jobs: usize,
 ) -> reqwest::Result<Vec<models::Job>> {
     http_client
         .post(format!("{}/jobs", APP_CONFIG.base_url))
-        .header("Authorization", format!("Bearer {access_token}"))
         .query(&[("batch", n_jobs)])
         .send()?
         .error_for_status()?
@@ -38,11 +34,9 @@ pub fn fetch_bulk_job(
 
 pub fn fetch_rules(
     http_client: &Client,
-    access_token: &str,
 ) -> reqwest::Result<models::RulesResponse> {
     http_client
         .get(format!("{}/rules", APP_CONFIG.base_url))
-        .header("Authorization", format!("Bearer {access_token}"))
         .send()?
         .error_for_status()?
         .json()
@@ -50,13 +44,11 @@ pub fn fetch_rules(
 
 pub fn send_result(
     http_client: &Client,
-    access_token: &str,
     body: models::ScanResult,
 ) -> reqwest::Result<()> {
     let body: ScanResultSerializer = body.into();
     http_client
         .put(format!("{}/package", APP_CONFIG.base_url))
-        .header("Authorization", format!("Bearer {access_token}"))
         .json(&body)
         .send()?
         .error_for_status()?;
