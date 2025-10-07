@@ -1,7 +1,7 @@
 mod methods;
 mod models;
 
-use chrono::{DateTime, TimeDelta, Utc};
+use chrono::{DateTime, Utc};
 use flate2::read::GzDecoder;
 pub use methods::*;
 pub use models::*;
@@ -12,11 +12,6 @@ use reqwest::{blocking::Client, Url};
 use std::{io, time::Duration};
 use tracing::{error, info, trace, warn};
 
-pub struct AuthState {
-    pub access_token: String,
-    pub expires_at: DateTime<Utc>,
-}
-
 pub struct RulesState {
     pub rules: yara::Rules,
     pub hash: String,
@@ -25,21 +20,16 @@ pub struct RulesState {
 #[warn(clippy::module_name_repetitions)]
 pub struct DragonflyClient {
     pub client: Client,
-    pub authentication_state: AuthState,
+    pub authentication_expires: DateTime<Utc>,
     pub rules_state: RulesState,
 }
 
 impl DragonflyClient {
     pub fn new() -> Result<Self> {
-        let client = Client::builder().gzip(true).build()?;
+        let client = Client::builder().gzip(true).cookie_store(true).build()?;
 
-        let auth_response = fetch_access_token(&client)?;
-        let rules_response = fetch_rules(&client, &auth_response.access_token)?;
-
-        let authentication_state = AuthState {
-            access_token: auth_response.access_token,
-            expires_at: Utc::now() + TimeDelta::seconds(auth_response.expires_in.into()),
-        };
+        let authentication_expires = perform_initial_authentication(&client)?;
+        let rules_response = fetch_rules(&client)?;
 
         let rules_state = RulesState {
             rules: rules_response.compile()?,
@@ -48,7 +38,7 @@ impl DragonflyClient {
 
         Ok(Self {
             client,
-            authentication_state,
+            authentication_expires,
             rules_state,
         })
     }
@@ -59,7 +49,7 @@ impl DragonflyClient {
     /// If an error occurs while reauthenticating, the function retries with an exponential backoff
     /// described by the equation `min(10 * 60, 2^(x - 1))` where `x` is the number of failed tries.
     pub fn reauthenticate(&mut self) {
-        if Utc::now() <= self.authentication_state.expires_at {
+        if Utc::now() <= self.authentication_expires {
             return;
         }
 
@@ -67,10 +57,10 @@ impl DragonflyClient {
         let initial_timeout = 1_f64;
         let mut tries = 0;
 
-        let authentication_response = loop {
-            let r = fetch_access_token(self.get_http_client());
+        let authentication_expires = loop {
+            let r =  perform_initial_authentication(self.get_http_client());
             match r {
-                Ok(authentication_response) => break authentication_response,
+                Ok(authentication_expires) => break authentication_expires,
                 Err(e) => {
                     let sleep_time = if tries < 10 {
                         let t = initial_timeout * base.powf(f64::from(tries));
@@ -89,10 +79,7 @@ impl DragonflyClient {
 
         trace!("Successfully got new access token!");
 
-        self.authentication_state = AuthState {
-            access_token: authentication_response.access_token,
-            expires_at: Utc::now() + TimeDelta::seconds(authentication_response.expires_in.into()),
-        };
+        self.authentication_expires = authentication_expires;
 
         info!("Successfully reauthenticated.");
     }
@@ -101,10 +88,7 @@ impl DragonflyClient {
     pub fn update_rules(&mut self) -> Result<()> {
         self.reauthenticate();
 
-        let response = fetch_rules(
-            self.get_http_client(),
-            &self.authentication_state.access_token,
-        )?;
+        let response = fetch_rules(self.get_http_client())?;
         self.rules_state.rules = response.compile()?;
         self.rules_state.hash = response.hash;
 
@@ -114,11 +98,7 @@ impl DragonflyClient {
     pub fn bulk_get_job(&mut self, n_jobs: usize) -> reqwest::Result<Vec<Job>> {
         self.reauthenticate();
 
-        fetch_bulk_job(
-            self.get_http_client(),
-            &self.authentication_state.access_token,
-            n_jobs,
-        )
+        fetch_bulk_job(self.get_http_client(), n_jobs)
     }
 
     pub fn get_job(&mut self) -> reqwest::Result<Option<Job>> {
@@ -132,11 +112,7 @@ impl DragonflyClient {
     pub fn send_result(&mut self, body: models::ScanResult) -> reqwest::Result<()> {
         self.reauthenticate();
 
-        send_result(
-            self.get_http_client(),
-            &self.authentication_state.access_token,
-            body,
-        )
+        send_result(self.get_http_client(), body)
     }
 
     /// Return a reference to the underlying HTTP Client
