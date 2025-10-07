@@ -1,4 +1,25 @@
+use chrono::{DateTime, Utc};
+use color_eyre::eyre::{eyre, ContextCompat, OptionExt};
 use reqwest::Url;
+use base64::{engine::general_purpose, Engine};
+use serde_json::Value;
+
+pub fn get_jwt_exp(jwt: &str) -> color_eyre::Result<DateTime<Utc>> {
+    let body = jwt.split('.').nth(1).ok_or_eyre("Invalid JWT")?;
+    let decoded = general_purpose::URL_SAFE_NO_PAD.decode(body)?;
+    let parsed: Value = serde_json::from_slice(&decoded)?;
+
+    let exp = match parsed.get("exp") {
+        Some(Value::Number(n)) => match n.as_i64() {
+            Some(v) => Ok(v),
+            None => Err(eyre!("Unable to represent exp as i64")),
+        }
+        _ => Err(eyre!("Unable to parse exp field in JWT")),
+    }?;
+
+    DateTime::from_timestamp(exp, 0)
+        .wrap_err("Invalid exp timestamp")
+}
 
 #[allow(clippy::doc_markdown)] // Clippy thinks PyPI is a documentation item
 /// Turn a package `name`, `version`, and `download_url` into a PyPI Inspector URL
@@ -50,5 +71,14 @@ mod tests {
             ("requests", "2.19.1", Url::parse("https://files.pythonhosted.org/packages/54/1f/782a5734931ddf2e1494e4cd615a51ff98e1879cbe9eecbdfeaf09aa75e9/requests-2.19.1.tar.gz/requests-2.19.1/LICENSE").unwrap()),
             Url::parse("https://inspector.pypi.io/project/requests/2.19.1/packages/54/1f/782a5734931ddf2e1494e4cd615a51ff98e1879cbe9eecbdfeaf09aa75e9/requests-2.19.1.tar.gz/requests-2.19.1/LICENSE/").unwrap()
         ),
+    }
+
+    #[test]
+    fn test_get_jwt_exp() {
+        let jwt = "abc.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiZXhwIjoxNzU5ODUwNzc2fQ.xyz";
+        let exp = get_jwt_exp(jwt).unwrap();
+        let expected = DateTime::from_timestamp(1759850776, 0).unwrap();
+
+        assert_eq!(exp, expected)
     }
 }
