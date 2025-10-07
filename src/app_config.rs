@@ -12,13 +12,8 @@ pub struct AppConfig {
     pub threads: usize,
     pub load_duration: u64,
     pub bulk_size: usize,
-    pub auth0_domain: String,
     pub client_id: String,
     pub client_secret: String,
-    pub audience: String,
-    pub grant_type: String,
-    pub username: String,
-    pub password: String,
     pub max_scan_size: u64,
 }
 
@@ -31,13 +26,8 @@ impl Default for AppConfig {
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         AppConfig {
             base_url: String::from("https://dragonfly.vipyrsec.com"),
-            auth0_domain: String::from("vipyrsec.us.auth0.com"),
-            audience: String::from("https://dragonfly.vipyrsec.com"),
-            grant_type: String::from("password"),
             client_id: String::new(),
             client_secret: String::new(),
-            username: String::new(),
-            password: String::new(),
             threads: available_parallelism,
             bulk_size: 20,
             load_duration: 60,
