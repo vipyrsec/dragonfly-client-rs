@@ -86,19 +86,3 @@ impl RulesResponse {
         Ok(compiled_rules)
     }
 }
-
-#[derive(Debug, Deserialize)]
-pub struct AuthResponse {
-    pub access_token: String,
-    pub expires_in: u32,
-}
-
-#[derive(Debug, Serialize)]
-pub struct AuthBody<'a> {
-    pub client_id: &'a str,
-    pub client_secret: &'a str,
-    pub audience: &'a str,
-    pub grant_type: &'a str,
-    pub username: &'a str,
-    pub password: &'a str,
-}
