@@ -2,8 +2,8 @@ use super::{models, ScanResultSerializer};
 
 use crate::{utils::get_jwt_exp, APP_CONFIG};
 use chrono::{DateTime, Utc};
-use reqwest::blocking::Client;
 use color_eyre::eyre::OptionExt;
+use reqwest::blocking::Client;
 
 pub fn perform_initial_authentication(http_client: &Client) -> color_eyre::Result<DateTime<Utc>> {
     let response = http_client
@@ -13,17 +13,15 @@ pub fn perform_initial_authentication(http_client: &Client) -> color_eyre::Resul
         .send()?
         .error_for_status()?;
 
-    let cookie = response.cookies()
+    let cookie = response
+        .cookies()
         .find(|c| c.name() == "CF_Authorization")
         .ok_or_eyre("Did not find CF_Authorization header in response")?;
 
     get_jwt_exp(cookie.value())
 }
 
-pub fn fetch_bulk_job(
-    http_client: &Client,
-    n_jobs: usize,
-) -> reqwest::Result<Vec<models::Job>> {
+pub fn fetch_bulk_job(http_client: &Client, n_jobs: usize) -> reqwest::Result<Vec<models::Job>> {
     http_client
         .post(format!("{}/jobs", APP_CONFIG.base_url))
         .query(&[("batch", n_jobs)])
@@ -32,9 +30,7 @@ pub fn fetch_bulk_job(
         .json()
 }
 
-pub fn fetch_rules(
-    http_client: &Client,
-) -> reqwest::Result<models::RulesResponse> {
+pub fn fetch_rules(http_client: &Client) -> reqwest::Result<models::RulesResponse> {
     http_client
         .get(format!("{}/rules", APP_CONFIG.base_url))
         .send()?
@@ -42,10 +38,7 @@ pub fn fetch_rules(
         .json()
 }
 
-pub fn send_result(
-    http_client: &Client,
-    body: models::ScanResult,
-) -> reqwest::Result<()> {
+pub fn send_result(http_client: &Client, body: models::ScanResult) -> reqwest::Result<()> {
     let body: ScanResultSerializer = body.into();
     http_client
         .put(format!("{}/package", APP_CONFIG.base_url))

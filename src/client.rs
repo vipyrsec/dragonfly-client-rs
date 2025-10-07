@@ -58,7 +58,7 @@ impl DragonflyClient {
         let mut tries = 0;
 
         let authentication_expires = loop {
-            let r =  perform_initial_authentication(self.get_http_client());
+            let r = perform_initial_authentication(self.get_http_client());
             match r {
                 Ok(authentication_expires) => break authentication_expires,
                 Err(e) => {

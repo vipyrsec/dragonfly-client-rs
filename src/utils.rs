@@ -1,7 +1,7 @@
+use base64::{engine::general_purpose, Engine};
 use chrono::{DateTime, Utc};
 use color_eyre::eyre::{eyre, ContextCompat, OptionExt};
 use reqwest::Url;
-use base64::{engine::general_purpose, Engine};
 use serde_json::Value;
 
 pub fn get_jwt_exp(jwt: &str) -> color_eyre::Result<DateTime<Utc>> {
@@ -13,12 +13,11 @@ pub fn get_jwt_exp(jwt: &str) -> color_eyre::Result<DateTime<Utc>> {
         Some(Value::Number(n)) => match n.as_i64() {
             Some(v) => Ok(v),
             None => Err(eyre!("Unable to represent exp as i64")),
-        }
+        },
         _ => Err(eyre!("Unable to parse exp field in JWT")),
     }?;
 
-    DateTime::from_timestamp(exp, 0)
-        .wrap_err("Invalid exp timestamp")
+    DateTime::from_timestamp(exp, 0).wrap_err("Invalid exp timestamp")
 }
 
 #[allow(clippy::doc_markdown)] // Clippy thinks PyPI is a documentation item
@@ -75,7 +74,8 @@ mod tests {
 
     #[test]
     fn test_get_jwt_exp() {
-        let jwt = "abc.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiZXhwIjoxNzU5ODUwNzc2fQ.xyz";
+        let jwt =
+            "abc.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiZXhwIjoxNzU5ODUwNzc2fQ.xyz";
         let exp = get_jwt_exp(jwt).unwrap();
         let expected = DateTime::from_timestamp(1759850776, 0).unwrap();
 
