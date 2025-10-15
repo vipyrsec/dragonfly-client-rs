@@ -2,9 +2,9 @@
 # hadolint global shell=bash
 
 # DEBIAN_VERSION The version name of Debian to use for the base images
-ARG DEBIAN_VERSION=bookworm
+ARG DEBIAN_VERSION=trixie
 # DEBIAN_VERSION The version number of Debian to use for the base images
-ARG DEBIAN_VERSION_NUMBER=12
+ARG DEBIAN_VERSION_NUMBER=13
 # DEBIAN_FRONTEND The frontend of the Apt package manager to use
 ARG DEBIAN_FRONTEND=noninteractive
 # PROJECT The name of this project (only to ensure the project name isn't misspelt in multiple commands)
