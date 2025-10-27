@@ -2,15 +2,15 @@
 # hadolint global shell=bash
 
 # DEBIAN_VERSION The version name of Debian to use for the base images
-ARG DEBIAN_VERSION=bookworm
+ARG DEBIAN_VERSION=trixie
 # DEBIAN_VERSION The version number of Debian to use for the base images
-ARG DEBIAN_VERSION_NUMBER=12
+ARG DEBIAN_VERSION_NUMBER=13
 # DEBIAN_FRONTEND The frontend of the Apt package manager to use
 ARG DEBIAN_FRONTEND=noninteractive
 # PROJECT The name of this project (only to ensure the project name isn't misspelt in multiple commands)
 ARG PROJECT=dragonfly-client-rs
 # RUST_VERSION The version of Rust to use for the base image for the build stages
-ARG RUST_VERSION=1.89
+ARG RUST_VERSION=1.90
 # RUSTFLAGS The compile-time flags to pass to the Rust compiler when compiling the project
 ARG RUSTFLAGS="-L/usr/local/lib"
 # YARA_VERSION The version of YARA against which to link the project
