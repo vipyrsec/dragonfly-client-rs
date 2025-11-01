@@ -26,7 +26,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: actions-rust-lang/setup-rust-toolchain@02be93da58aa71fb456aa9c43b301149248829d8  # v1.15.1
+      - uses: actions-rust-lang/setup-rust-toolchain@1780873c7b576612439a134613cc4cc74ce5538c  # v1.15.2
         with:
           components: rustfmt
 
@@ -69,12 +69,12 @@ jobs:
           persist-credentials: false
 
       - name: Download YARA
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0  # v5.0.0
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53  # v6.0.0
         with:
           name: ${{ needs.yara.outputs.artifacts }}
           path: .yara
 
-      - uses: actions-rust-lang/setup-rust-toolchain@02be93da58aa71fb456aa9c43b301149248829d8  # v1.15.1
+      - uses: actions-rust-lang/setup-rust-toolchain@1780873c7b576612439a134613cc4cc74ce5538c  # v1.15.2
         with:
           components: clippy
           cache-key: x86_64-unknown-linux-gnu
@@ -109,12 +109,12 @@ jobs:
           persist-credentials: false
 
       - name: Download YARA
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0  # v5.0.0
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53  # v6.0.0
         with:
           name: ${{ fromJson(needs.yara-output.outputs.result).artifacts[matrix.triple.runs-on] }}
           path: .yara
 
-      - uses: actions-rust-lang/setup-rust-toolchain@02be93da58aa71fb456aa9c43b301149248829d8  # v1.15.1
+      - uses: actions-rust-lang/setup-rust-toolchain@1780873c7b576612439a134613cc4cc74ce5538c  # v1.15.2
         with:
           cache-key: ${{ matrix.triple.target }}
 
@@ -135,12 +135,12 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: actions-rust-lang/setup-rust-toolchain@02be93da58aa71fb456aa9c43b301149248829d8  # v1.15.1
+      - uses: actions-rust-lang/setup-rust-toolchain@1780873c7b576612439a134613cc4cc74ce5538c  # v1.15.2
         with:
           cache-key: x86_64-unknown-linux-gnu
 
       - name: Download YARA
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0  # v5.0.0
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53  # v6.0.0
         with:
           name: ${{ needs.yara.outputs.artifacts }}
           path: .yara
