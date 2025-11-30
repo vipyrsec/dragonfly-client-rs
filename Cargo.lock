@@ -2881,6 +2881,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1b2168a47828c221f8ce1918a902fb8ee5f5a0aad57f417ab6d3bf7b9047ffa2"
 dependencies = [
  "bindgen",
+ "cc",
+ "fs_extra",
+ "glob",
 ]
 
 [[package]]

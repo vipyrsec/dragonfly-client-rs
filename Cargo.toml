@@ -21,7 +21,7 @@ tracing = "0.1.44"
 tracing-subscriber = {version = "0.3.22", features = ["env-filter"]}
 walkdir = "2.5.0"
 yara = "0.31.0"
-yara-sys = {version = "0.31.0", features = ["yara-static"]}
+yara-sys = {version = "0.31.0", features = ["vendored"]}
 zip = "7.0.0"
 
 [profile.release]
