@@ -42,7 +42,7 @@ tar -xzf "$archive_filename" && cd "yara-$YARA_VERSION" && ./bootstrap.sh && ./c
 EOT
 
 WORKDIR /app
-COPY .cargo Cargo.toml ./
+COPY Cargo.toml Cargo.toml
 COPY Cargo.lock Cargo.lock
 
 # build-debug The build stage for the debug build
