@@ -10,7 +10,7 @@ ARG DEBIAN_FRONTEND=noninteractive
 # PROJECT The name of this project (only to ensure the project name isn't misspelt in multiple commands)
 ARG PROJECT=dragonfly-client-rs
 # RUST_VERSION The version of Rust to use for the base image for the build stages
-ARG RUST_VERSION=1.90
+ARG RUST_VERSION=1.91
 # RUSTFLAGS The compile-time flags to pass to the Rust compiler when compiling the project
 ARG RUSTFLAGS="-L/usr/local/lib"
 # YARA_VERSION The version of YARA against which to link the project
