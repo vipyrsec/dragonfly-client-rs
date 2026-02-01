@@ -5,10 +5,10 @@ edition = "2021"
 
 [dependencies]
 base64 = "0.22.1"
-chrono = "0.4.42"
+chrono = "0.4.43"
 color-eyre = "0.6.5"
 figment = {version = "0.10.19", features = ["env", "toml"]}
-flate2 = "1.1.5"
+flate2 = "1.1.8"
 log = "0.4.29"
 once_cell = "1.21.3"
 parking_lot = "0.12.5"
@@ -22,7 +22,7 @@ tracing-subscriber = {version = "0.3.22", features = ["env-filter"]}
 walkdir = "2.5.0"
 yara = "0.31.0"
 yara-sys = {version = "0.31.0", features = ["vendored"]}
-zip = "7.0.0"
+zip = "7.2.0"
 
 [profile.release]
 strip = true
