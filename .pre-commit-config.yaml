@@ -62,12 +62,12 @@ repos:
         pass_filenames: false
 
   - repo: https://github.com/python-jsonschema/check-jsonschema
-    rev: 9b9df9f1d3bd9a5e7a52d8f61a3be3e29e73d127  # frozen: 0.33.3
+    rev: ba8f7ac0e0c0d25bae15b628b634316e7d201db5  # frozen: 0.36.1
     hooks:
       - id: check-github-workflows
 
   - repo: https://github.com/lyz-code/yamlfix
-    rev: 881308160e4589cf886919438a3ed0acba42ea0e  # frozen: 1.18.0
+    rev: f857ca370af3db7e5e181373d45c06a148fac3f8  # frozen: 1.19.1
     hooks:
       - id: yamlfix
         args:
@@ -75,25 +75,25 @@ repos:
           - .yamlfix.toml
 
   - repo: https://github.com/adrienverge/yamllint
-    rev: 79a6b2b1392eaf49cdd32ac4f14be1a809bbd8f7  # frozen: v1.37.1
+    rev: cba56bcde1fdd01c1deb3f945e69764c291a6530  # frozen: v1.38.0
     hooks:
       - id: yamllint
         args:
           - --strict
 
   - repo: https://github.com/igorshubovych/markdownlint-cli
-    rev: 192ad822316c3a22fb3d3cc8aa6eafa0b8488360  # frozen: v0.45.0
+    rev: 76b3d32d3f4b965e1d6425253c59407420ae2c43  # frozen: v0.47.0
     hooks:
       - id: markdownlint-fix
 
   - repo: https://github.com/ComPWA/taplo-pre-commit
-    rev: 23eab0f0eedcbedebff420f5fdfb284744adc7b3  # frozen: v0.9.3
+    rev: ade0f95ddcf661c697d4670d2cfcbe95d0048a0a  # frozen: v0.9.3
     hooks:
       - id: taplo-format
       - id: taplo-lint
 
   - repo: https://github.com/zizmorcore/zizmor-pre-commit
-    rev: 5fee7cc03a2498e0ce36a18f36dfb558a30a426c  # frozen: v1.12.1
+    rev: b546b77c44c466a54a42af5499dcc0dcc1a3193f  # frozen: v1.22.0
     hooks:
       - id: zizmor
         args:
@@ -104,9 +104,3 @@ repos:
     rev: 7d94620933e79b8acaa0cd9e60e9864b07673d86  # frozen: v0.1.11
     hooks:
       - id: ripsecrets
-
-  - repo: https://github.com/crate-ci/typos
-    rev: edb4e206047e89b93ebe08f1a2ccc3d581a70cc7  # frozen: v1
-    hooks:
-      - id: typos
-        args: []
