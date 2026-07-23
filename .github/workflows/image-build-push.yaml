@@ -54,15 +54,6 @@ jobs:
         with:
           cleanup: false
           platforms: ${{ matrix.platform }}
-          buildkitd-config-inline: |
-            [worker.oci]
-            gc = true
-            gckeepstorage = 10_000  # 10 GB
-
-            [[worker.oci.gcpolicy]]
-            all = true
-            keepBytes = 10_000_000_000  # 10 GB
-            keepDuration = 7_776_000  # 90 days
 
       - name: Log into registry ${{ env.REGISTRY }}
         uses: docker/login-action@06fb636fac595d6fb4b28a5dfcb21a6f5091859c  # v4.5.0
