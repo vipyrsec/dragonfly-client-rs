@@ -52,10 +52,9 @@ jobs:
         id: buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c  # v4.2.0
         with:
-          install: true
           cleanup: false
           platforms: ${{ matrix.platform }}
-          config-inline: |
+          buildkitd-config-inline: |
             [worker.oci]
             gc = true
             gckeepstorage = 10_000  # 10 GB
@@ -84,17 +83,6 @@ jobs:
             type=ref,event=tag
             type=sha,format=long
 
-      - name: Inject Docker Build(x|Kit) cache mounts
-        uses: sid-maddy/buildkit-cache-dance/inject@381b8ab51b5c05c1c52520d2b8cd592a2aca670d  # v2
-        with:
-          cache-mounts: |
-            cargo-registry,/usr/local/cargo/registry
-            rust-target-release,/app/target
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          key: rust-buildkit-cache-${{ github.ref }}-${{ matrix.platform }}-${{ hashFiles('Cargo.toml', 'Cargo.lock') }}
-          restore-keys: |
-            rust-buildkit-cache-${{ github.ref }}-${{ matrix.platform }}-
-
       - name: Read Rust channel
         id: rust-channel
         run: |
@@ -120,15 +108,6 @@ jobs:
           platforms: ${{ matrix.platform }}
           push: ${{ github.ref == 'refs/heads/main' || startswith(github.event.ref, 'refs/tags/v') }}
           tags: ${{ steps.docker_meta.outputs.tags }}
-
-      - name: Extract Docker Build(x|Kit) cache mounts
-        uses: sid-maddy/buildkit-cache-dance/extract@381b8ab51b5c05c1c52520d2b8cd592a2aca670d  # v2
-        with:
-          cache-mounts: |
-            cargo-registry,/usr/local/cargo/registry
-            rust-target-release,/app/target
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          key: rust-buildkit-cache-${{ github.ref }}-${{ matrix.platform }}-${{ hashFiles('Cargo.toml', 'Cargo.lock') }}
 
       # Sign the resulting Docker image digest.
       # This will only write to the public Rekor transparency log when the Docker repository is public to avoid leaking
