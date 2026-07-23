@@ -12,8 +12,8 @@ pub struct AppConfig {
     pub threads: usize,
     pub load_duration: u64,
     pub bulk_size: usize,
-    pub client_id: String,
-    pub client_secret: String,
+    pub cf_access_client_id: String,
+    pub cf_access_client_secret: String,
     pub max_scan_size: u64,
 }
 
@@ -26,8 +26,8 @@ impl Default for AppConfig {
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         AppConfig {
             base_url: String::from("https://dragonfly.vipyrsec.com"),
-            client_id: String::new(),
-            client_secret: String::new(),
+            cf_access_client_id: String::new(),
+            cf_access_client_secret: String::new(),
             threads: available_parallelism,
             bulk_size: 20,
             load_duration: 60,

@@ -150,14 +150,11 @@ the`DRAGONFLY_LOAD_DURATION` environment variable. The jobs returned by the API
 endpoint will then be spawned as tasks in the threadpool. This process repeats for
 the duration of the program.
 
-The client starts up by first authenticating with Auth0 to obtain an access
-token. It then stores this access token in a shared-state thread
-synchronization primitive that allows multiple concurrent readers but only one
-writer. This new access token is used to fetch the YARA rules from the
-Dragonfly API. The source code of the YARA rules is compiled (very much like
-compiling regex) and stored in the shared state. Then, the necessary threads
-are spawned. Once the threadpool task has finished scanning, it will send
-it's results over the Dragonfly HTTP API.
+The client authenticates every Dragonfly API request with a Cloudflare Access
+service token. The source code of the YARA rules is compiled (very much like
+compiling regex) and stored in shared state. Then, the necessary threads are
+spawned. Once a threadpool task has finished scanning, it sends its results
+over the Dragonfly HTTP API.
 
 ### Environment variables
 
@@ -165,16 +162,12 @@ Below are a list of environment variables that need to be configured, and what
 they do
 
 <!-- markdownlint-disable MD013 -->
-| Variable                  | Default                          | Description                                                                     |
-| ------------------------- | -------------------------------- | ------------------------------------------------------------------------------- |
-| `DRAGONFLY_BASE_URL`      | `https://dragonfly.vipyrsec.com` | The base API URL for the mainframe server                                       |
-| `DRAGONFLY_AUTH0_DOMAIN`  | `vipyrsec.us.auth0.com`          | The auth0 domain that requests go to                                            |
-| `DRAGONFLY_AUDIENCE`      | `https://dragonfly.vipyrsec.com` | Auth0 Audience field                                                            |
-| `DRAGONFLY_CLIENT_ID`     |                                  | Auth0 client ID                                                                 |
-| `DRAGONFLY_CLIENT_SECRET` |                                  | Auth0 client secret                                                             |
-| `DRAGONFLY_USERNAME`      |                                  | Provisioned username                                                            |
-| `DRAGONFLY_PASSWORD`      |                                  | Provisioned password                                                            |
-| `DRAGONFLY_THREADS`       | Available parallelism / `1`      | Attempts to auto-detect the amount of threads, or defaults to 1 if not possible |
-| `DRAGONFLY_LOAD_DURATION` | 60                               | Seconds to wait between each API job request                                    |
-| `DRAGONFLY_BULK_SIZE`     | 20                               | The amount of jobs to request at once                                           |
+| Variable                              | Default                          | Description                                                                     |
+| ------------------------------------- | -------------------------------- | ------------------------------------------------------------------------------- |
+| `DRAGONFLY_BASE_URL`                  | `https://dragonfly.vipyrsec.com` | The base API URL for the mainframe server                                       |
+| `DRAGONFLY_CF_ACCESS_CLIENT_ID`       |                                  | Environment-specific Cloudflare Access service-token client ID                  |
+| `DRAGONFLY_CF_ACCESS_CLIENT_SECRET`   |                                  | Environment-specific Cloudflare Access service-token client secret              |
+| `DRAGONFLY_THREADS`                   | Available parallelism / `1`      | Attempts to auto-detect the amount of threads, or defaults to 1 if not possible |
+| `DRAGONFLY_LOAD_DURATION`             | 60                               | Seconds to wait between each API job request                                    |
+| `DRAGONFLY_BULK_SIZE`                 | 20                               | The amount of jobs to request at once                                           |
 <!-- markdownlint-enable MD013 -->
