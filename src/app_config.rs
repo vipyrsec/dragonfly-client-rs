@@ -12,22 +12,20 @@ pub struct AppConfig {
     pub threads: usize,
     pub load_duration: u64,
     pub bulk_size: usize,
-    pub client_id: String,
-    pub client_secret: String,
+    pub cf_access_client_id: String,
+    pub cf_access_client_secret: String,
     pub max_scan_size: u64,
 }
 
 impl Default for AppConfig {
     fn default() -> Self {
-        let available_parallelism = std::thread::available_parallelism()
-            .map(usize::from)
-            .unwrap_or(1);
+        let available_parallelism = std::thread::available_parallelism().map_or(1, usize::from);
 
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         AppConfig {
             base_url: String::from("https://dragonfly.vipyrsec.com"),
-            client_id: String::new(),
-            client_secret: String::new(),
+            cf_access_client_id: String::new(),
+            cf_access_client_secret: String::new(),
             threads: available_parallelism,
             bulk_size: 20,
             load_duration: 60,

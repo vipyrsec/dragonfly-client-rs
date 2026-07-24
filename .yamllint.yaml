@@ -2,7 +2,6 @@
 extends: default
 
 ignore-from-file:
-  - .git/info/exclude
   - .gitignore
 
 rules:
