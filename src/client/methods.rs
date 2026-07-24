@@ -41,7 +41,7 @@ pub fn send_result(
 #[cfg(test)]
 mod tests {
     use super::{fetch_bulk_job, fetch_rules, send_result};
-    use crate::client::{build_http_client, SubmitJobResultsError};
+    use crate::client::{build_api_http_client, SubmitJobResultsError};
     use std::{
         io::{Read, Write},
         net::TcpListener,
@@ -114,7 +114,7 @@ mod tests {
     #[test]
     fn jobs_route_uses_cloudflare_access_service_token() {
         let (base_url, request) = serve_once("[]");
-        let client = build_http_client(CLIENT_ID, CLIENT_SECRET).unwrap();
+        let client = build_api_http_client(CLIENT_ID, CLIENT_SECRET).unwrap();
 
         let jobs = fetch_bulk_job(&client, &base_url, 3).unwrap();
 
@@ -127,7 +127,7 @@ mod tests {
     #[test]
     fn rules_route_uses_cloudflare_access_service_token() {
         let (base_url, request) = serve_once(r#"{"hash":"abc123","rules":{}}"#);
-        let client = build_http_client(CLIENT_ID, CLIENT_SECRET).unwrap();
+        let client = build_api_http_client(CLIENT_ID, CLIENT_SECRET).unwrap();
 
         let rules = fetch_rules(&client, &base_url).unwrap();
 
@@ -140,7 +140,7 @@ mod tests {
     #[test]
     fn package_route_uses_cloudflare_access_service_token() {
         let (base_url, request) = serve_once("");
-        let client = build_http_client(CLIENT_ID, CLIENT_SECRET).unwrap();
+        let client = build_api_http_client(CLIENT_ID, CLIENT_SECRET).unwrap();
         let result = Err(SubmitJobResultsError {
             name: "example".to_owned(),
             version: "1.0.0".to_owned(),

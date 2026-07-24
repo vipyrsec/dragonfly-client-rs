@@ -22,19 +22,21 @@ pub struct RulesState {
 
 #[warn(clippy::module_name_repetitions)]
 pub struct DragonflyClient {
-    pub client: Client,
+    api_client: Client,
+    download_client: Client,
     pub rules_state: RulesState,
     base_url: String,
 }
 
 impl DragonflyClient {
     pub fn new() -> Result<Self> {
-        let client = build_http_client(
+        let api_client = build_api_http_client(
             &APP_CONFIG.cf_access_client_id,
             &APP_CONFIG.cf_access_client_secret,
         )?;
+        let download_client = build_download_http_client()?;
 
-        let rules_response = fetch_rules(&client, &APP_CONFIG.base_url)?;
+        let rules_response = fetch_rules(&api_client, &APP_CONFIG.base_url)?;
 
         let rules_state = RulesState {
             rules: rules_response.compile()?,
@@ -42,7 +44,8 @@ impl DragonflyClient {
         };
 
         Ok(Self {
-            client,
+            api_client,
+            download_client,
             rules_state,
             base_url: APP_CONFIG.base_url.clone(),
         })
@@ -50,7 +53,7 @@ impl DragonflyClient {
 
     /// Update the global ruleset. Waits for a write lock.
     pub fn update_rules(&mut self) -> Result<()> {
-        let response = fetch_rules(self.get_http_client(), &self.base_url)?;
+        let response = fetch_rules(&self.api_client, &self.base_url)?;
         self.rules_state.rules = response.compile()?;
         self.rules_state.hash = response.hash;
 
@@ -58,7 +61,7 @@ impl DragonflyClient {
     }
 
     pub fn bulk_get_job(&mut self, n_jobs: usize) -> reqwest::Result<Vec<Job>> {
-        fetch_bulk_job(self.get_http_client(), &self.base_url, n_jobs)
+        fetch_bulk_job(&self.api_client, &self.base_url, n_jobs)
     }
 
     pub fn get_job(&mut self) -> reqwest::Result<Option<Job>> {
@@ -68,16 +71,16 @@ impl DragonflyClient {
 
     /// Send a [`crate::client::models::ScanResult`] to mainframe
     pub fn send_result(&mut self, body: models::ScanResult) -> reqwest::Result<()> {
-        send_result(self.get_http_client(), &self.base_url, body)
+        send_result(&self.api_client, &self.base_url, body)
     }
 
-    /// Return a reference to the underlying HTTP Client
-    pub fn get_http_client(&self) -> &Client {
-        &self.client
+    /// Return the client used for uncredentialed distribution downloads.
+    pub(crate) fn download_client(&self) -> &Client {
+        &self.download_client
     }
 }
 
-fn build_http_client(client_id: &str, client_secret: &str) -> Result<Client> {
+fn build_api_http_client(client_id: &str, client_secret: &str) -> Result<Client> {
     let mut headers = HeaderMap::new();
     headers.insert("CF-Access-Client-Id", HeaderValue::from_str(client_id)?);
 
@@ -89,6 +92,10 @@ fn build_http_client(client_id: &str, client_secret: &str) -> Result<Client> {
         .gzip(true)
         .default_headers(headers)
         .build()?)
+}
+
+fn build_download_http_client() -> reqwest::Result<Client> {
+    Client::builder().gzip(true).build()
 }
 
 /// Download and unpack a tarball, return the [`TempDir`] containing the contents.
@@ -123,5 +130,85 @@ pub fn download_distribution(http_client: &Client, download_url: Url) -> Result<
         extract_tarball(response)
     } else {
         extract_zipfile(response)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{build_api_http_client, build_download_http_client, DragonflyClient, RulesState};
+    use std::{
+        io::{Read, Write},
+        net::TcpListener,
+        sync::mpsc,
+        thread,
+    };
+    use yara::Compiler;
+
+    const CLIENT_ID: &str = "test-client.access";
+    const CLIENT_SECRET: &str = "test-secret";
+
+    fn serve_once() -> (String, mpsc::Receiver<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let (sender, receiver) = mpsc::channel();
+
+        thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 4096];
+
+            loop {
+                let bytes_read = stream.read(&mut buffer).unwrap();
+                if bytes_read == 0 {
+                    break;
+                }
+                request.extend_from_slice(&buffer[..bytes_read]);
+                if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
+
+            sender.send(String::from_utf8(request).unwrap()).unwrap();
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            )
+            .unwrap();
+        });
+
+        (format!("http://{address}/example.tar.gz"), receiver)
+    }
+
+    #[test]
+    fn distribution_downloads_do_not_send_cloudflare_access_credentials() {
+        let (download_url, request) = serve_once();
+        let rules = Compiler::new()
+            .unwrap()
+            .add_rules_str("rule test_rule { condition: false }")
+            .unwrap()
+            .compile_rules()
+            .unwrap();
+        let client = DragonflyClient {
+            api_client: build_api_http_client(CLIENT_ID, CLIENT_SECRET).unwrap(),
+            download_client: build_download_http_client().unwrap(),
+            rules_state: RulesState {
+                rules,
+                hash: String::new(),
+            },
+            base_url: String::from("https://dragonfly.example"),
+        };
+
+        client
+            .download_client()
+            .get(download_url)
+            .send()
+            .unwrap()
+            .error_for_status()
+            .unwrap();
+
+        let request = request.recv().unwrap().to_ascii_lowercase();
+        assert!(!request.contains("\r\ncf-access-client-id:"));
+        assert!(!request.contains("\r\ncf-access-client-secret:"));
+        assert!(!request.contains("\r\nauthorization:"));
     }
 }

@@ -21,7 +21,7 @@ fn scan_package(client: &DragonflyClient, job: Job) -> ScanResult {
     let span = span!(Level::INFO, "Job", name = job.name, version = job.version);
     let _enter = span.enter();
 
-    match scan_all_distributions(client.get_http_client(), &client.rules_state.rules, &job) {
+    match scan_all_distributions(client.download_client(), &client.rules_state.rules, &job) {
         Ok(results) => {
             let package_scan_results =
                 PackageScanResults::new(job.name, job.version, results, job.hash);
