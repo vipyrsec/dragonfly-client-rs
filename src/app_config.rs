@@ -19,9 +19,7 @@ pub struct AppConfig {
 
 impl Default for AppConfig {
     fn default() -> Self {
-        let available_parallelism = std::thread::available_parallelism()
-            .map(usize::from)
-            .unwrap_or(1);
+        let available_parallelism = std::thread::available_parallelism().map_or(1, usize::from);
 
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         AppConfig {
