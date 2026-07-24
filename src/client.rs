@@ -86,17 +86,12 @@ impl DragonflyClient {
         Ok(())
     }
 
-    pub fn bulk_get_job(&mut self, n_jobs: usize) -> reqwest::Result<Vec<Job>> {
+    pub fn bulk_get_job(&self, n_jobs: usize) -> reqwest::Result<Vec<Job>> {
         fetch_bulk_job(&self.api_client, &self.base_url, n_jobs)
     }
 
-    pub fn get_job(&mut self) -> reqwest::Result<Option<Job>> {
-        // not `slice::first` because we want to own the Job
-        self.bulk_get_job(1).map(|jobs| jobs.into_iter().nth(0))
-    }
-
     /// Send a [`crate::client::models::ScanResult`] to mainframe
-    pub fn send_result(&mut self, body: models::ScanResult) -> reqwest::Result<()> {
+    pub fn send_result(&self, body: models::ScanResult) -> reqwest::Result<()> {
         send_result(&self.api_client, &self.base_url, body)
     }
 

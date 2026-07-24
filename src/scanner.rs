@@ -154,13 +154,9 @@ impl DistributionScanResults {
         self.matched_rules.iter().collect()
     }
 
-    /// Calculate the total score of this distribution, without counting duplicates twice
-    pub fn get_total_score(&self) -> i64 {
-        self.matched_rules.iter().map(|rule| rule.score).sum()
-    }
-
     /// Get a vector of the **unique** rule identifiers this distribution matched
-    pub fn get_matched_rule_identifiers(&self) -> Vec<&str> {
+    #[cfg(test)]
+    fn get_matched_rule_identifiers(&self) -> Vec<&str> {
         self.matched_rules
             .iter()
             .map(|rule| rule.name.as_str())
@@ -207,24 +203,29 @@ impl PackageScanResults {
         let highest_score_distribution = self
             .distribution_scan_results
             .iter()
-            .max_by_key(|distrib| distrib.get_total_score());
+            .filter(|distribution| distribution.get_most_malicious_file().is_some())
+            .max_by_key(|distribution| {
+                distribution
+                    .get_most_malicious_file()
+                    .map(FileScanResult::calculate_score)
+            });
 
-        let score = highest_score_distribution
-            .map(DistributionScanResults::get_total_score)
-            .unwrap_or_default();
+        let matched_rules = self
+            .distribution_scan_results
+            .iter()
+            .flat_map(|distribution| &distribution.matched_rules)
+            .collect::<HashSet<_>>();
+
+        let score = matched_rules.iter().map(|rule| rule.score).sum();
 
         let inspector_url =
             highest_score_distribution.and_then(DistributionScanResults::inspector_url);
 
-        // collect all rule identifiers into a HashSet to dedup, then convert to Vec
-        let rules_matched = self
-            .distribution_scan_results
+        let mut rules_matched = matched_rules
             .iter()
-            .flat_map(DistributionScanResults::get_matched_rule_identifiers)
-            .map(std::string::ToString::to_string)
-            .collect::<HashSet<String>>()
-            .into_iter()
-            .collect();
+            .map(|rule| rule.name.clone())
+            .collect::<Vec<_>>();
+        rules_matched.sort_unstable();
 
         SubmitJobResultsSuccess {
             name: self.name.clone(),
@@ -579,10 +580,16 @@ mod tests {
         let file_scan_results2 = vec![
             FileScanResult {
                 path: PathBuf::default(),
-                rules: vec![RuleScore {
-                    name: String::from("rule3"),
-                    score: 2,
-                }],
+                rules: vec![
+                    RuleScore {
+                        name: String::from("rule2"),
+                        score: 7,
+                    },
+                    RuleScore {
+                        name: String::from("rule3"),
+                        score: 2,
+                    },
+                ],
             },
             FileScanResult {
                 path: PathBuf::default(),
@@ -608,9 +615,9 @@ mod tests {
 
         assert_eq!(
             body.inspector_url,
-            Some(String::from("https://example.net/distrib1.tar.gz"))
+            Some(String::from("https://example.net/distrib2.whl"))
         );
-        assert_eq!(body.score, 12);
+        assert_eq!(body.score, 23);
         assert_eq!(
             HashSet::from([
                 "rule1".into(),

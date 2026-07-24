@@ -111,16 +111,17 @@ main entry point interface to the scanner logic is via
 stages each compressed distribution on temporary disk, validates its resource
 limits, and extracts it. Files are scanned individually from disk by YARA.
 Only the highest-scoring file and unique matched rules are retained for each
-distribution.
+distribution. After every distribution finishes, the client unions matched
+rules across the complete package, sums each unique rule's score once, and
+submits one package verdict to the API. The inspector URL identifies the
+highest-scoring file anywhere in the package.
 
-The loader thread's primary responsibility is to request a bunch of jobs from
-the API and spawn threadpool tasks on a timer. It will perform a "bulk job
-request" (`POST /jobs`) API request to retrieve N jobs from the API, where
-N can be configured via the `DRAGONFLY_BULK_SIZE` environment variable. The
-client will make these bulk requests at an interval defined by
-the`DRAGONFLY_LOAD_DURATION` environment variable. The jobs returned by the API
-endpoint will then be spawned as tasks in the threadpool. This process repeats for
-the duration of the program.
+The client requests at most one job per configured worker, up to
+`DRAGONFLY_BULK_SIZE`, and scans those packages concurrently. Each package's
+distributions and files remain sequential. The default worker count follows the
+machine's available CPU parallelism; constrained deployments can set
+`DRAGONFLY_THREADS=1` to guarantee sequential package processing. Empty and
+failed job requests are retried after `DRAGONFLY_LOAD_DURATION` seconds.
 
 The client authenticates every Dragonfly API request with a Cloudflare Access
 service token. The source code of the YARA rules is compiled (very much like
@@ -139,9 +140,9 @@ they do
 | `DRAGONFLY_BASE_URL`                  | `https://dragonfly.vipyrsec.com` | The base API URL for the mainframe server                                       |
 | `DRAGONFLY_CF_ACCESS_CLIENT_ID`       |                                  | Environment-specific Cloudflare Access service-token client ID                  |
 | `DRAGONFLY_CF_ACCESS_CLIENT_SECRET`   |                                  | Environment-specific Cloudflare Access service-token client secret              |
-| `DRAGONFLY_THREADS`                   | Available parallelism / `1`      | Attempts to auto-detect the amount of threads, or defaults to 1 if not possible |
+| `DRAGONFLY_THREADS`                   | Available parallelism / `1`      | Concurrent package workers; set to 1 for sequential constrained deployments     |
 | `DRAGONFLY_LOAD_DURATION`             | 60                               | Seconds to wait between each API job request                                    |
-| `DRAGONFLY_BULK_SIZE`                 | 20                               | The amount of jobs to request at once                                           |
+| `DRAGONFLY_BULK_SIZE`                 | 20                               | Upper bound for job request, also capped by the worker count                    |
 | `DRAGONFLY_MAX_ARCHIVE_ENTRIES`       | 4096                             | Maximum number of entries in one archive                                        |
 | `DRAGONFLY_MAX_DISTRIBUTIONS`         | 32                               | Maximum number of distributions in one package                                  |
 | `DRAGONFLY_MAX_DOWNLOAD_SIZE`         | 33554432                         | Maximum compressed distribution size in bytes                                   |
