@@ -15,7 +15,6 @@ allow = [
   "Unicode-3.0",
   "Unlicense",
   "Zlib",
-  "bzip2-1.0.6",
 ]
 
 [bans]

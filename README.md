@@ -81,31 +81,12 @@ sender thread.
 ### Performance, efficiency, and optimization
 
 The client aims to be highly configurable to suit a variety of host machines.
-The environment variables of most value in this regard are as follows:
-
-- `DRAGONFLY_THREADS` defaults to the number of available parallelism, or
-  1 if it could not be determined. [This
-  page](https://doc.rust-lang.org/stable/std/thread/fn.available_parallelism.html)
-  explains in detail how this is calculated, but in short, it is often the
-  number of compute cores a machine has. The client will spawn this many
-  threads in a threadpool executor to perform concurrent scanning of files.
-- `DRAGONFLY_LOAD_DURATION` defaults to `60` seconds. This is the frequency
-  with which the loader thread will send an HTTP API request to the Dragonfly
-  API requesting N amount of jobs (defined by `DRAGONFLY_BULK_SIZE`).
-- `DRAGONFLY_BULK_SIZE` defaults to `20`. This is the amount of jobs the loader
-  thread will request from the API at once. Setting this too high may mean the
-  scanner threads can't keep up, but setting this too low may mean that
-  more CPU time is wasted by idling. `DRAGONFLY_MAX_SCAN_SIZE` defaults to
-- `128000000`. The maximum size of downloaded distributions, in bytes. Setting
-  this too high may cause clients with low memory to run out of memory and
-  crash, setting it too low may mean most packages are not scanned (due to
-  being above the size limit).
-
-Many of these options have disadvantages to setting these options to any
-extreme (too high or too low), so it's important to tweak it to a good middle
-ground that works best in your environment. However, we have tried our best to
-provide sensible defaults that will work reasonably efficiently: 20 jobs are
-requested from the API every 60 seconds.
+The scanner processes one package and one distribution at a time. Compressed
+downloads, expanded archives, individual scan targets, archive entry counts,
+and distributions per package are bounded independently. The defaults target
+a 512 MiB background-worker container while preserving substantial headroom
+for compiled YARA rules, ZIP metadata, allocator overhead, and filesystem
+cache.
 
 ### How it works: Detailed Breakdown
 
@@ -125,21 +106,12 @@ comprised of several "distributions" in the form of gzipped tarballs or wheels
 (which behave similarly to zip files, hence the use of the `zip` crate). Each
 distribution is comprised of a flat sequence of files (the hierarchical nature
 of the traditional file/folder system has been flatted for our use case). The
-main entry point interface to the scanner logic is via the
-`scan_all_distribution`. This loops over the download URLs of each distribution
-of the given job, and attempts to download them. The maximum size of these
-downloads, in bytes, is controlled by the `DRAGONFLY_MAX_SIZE` environment
-variable (128MB by default) Then, for each distribution downloaded, we loop
-over each file in that distribution, load it into memory, and apply the
-compiled YARA rules stored in memory against the file contents (this is done by
-the underlying C YARA library). Then, the results of each files is stored in
-a "distribution scan result" struct that represents the scan results of
-a single distribution. This process is repeated for all the distributions in
-a package, and are aggregated into a "package scan result" struct. This model
-highly reflects PyPI's model of "package -> distributions -> files". This
-process allows us to start with the download URLs of each distribution of
-a package, and end with the scan results of each file of each distribution of
-the given package.
+main entry point interface to the scanner logic is via
+`scan_all_distributions`. This loops over the download URLs sequentially,
+stages each compressed distribution on temporary disk, validates its resource
+limits, and extracts it. Files are scanned individually from disk by YARA.
+Only the highest-scoring file and unique matched rules are retained for each
+distribution.
 
 The loader thread's primary responsibility is to request a bunch of jobs from
 the API and spawn threadpool tasks on a timer. It will perform a "bulk job
@@ -170,4 +142,9 @@ they do
 | `DRAGONFLY_THREADS`                   | Available parallelism / `1`      | Attempts to auto-detect the amount of threads, or defaults to 1 if not possible |
 | `DRAGONFLY_LOAD_DURATION`             | 60                               | Seconds to wait between each API job request                                    |
 | `DRAGONFLY_BULK_SIZE`                 | 20                               | The amount of jobs to request at once                                           |
+| `DRAGONFLY_MAX_ARCHIVE_ENTRIES`       | 4096                             | Maximum number of entries in one archive                                        |
+| `DRAGONFLY_MAX_DISTRIBUTIONS`         | 32                               | Maximum number of distributions in one package                                  |
+| `DRAGONFLY_MAX_DOWNLOAD_SIZE`         | 33554432                         | Maximum compressed distribution size in bytes                                   |
+| `DRAGONFLY_MAX_EXPANDED_SIZE`         | 67108864                         | Maximum total expanded distribution size in bytes                               |
+| `DRAGONFLY_MAX_SCAN_SIZE`             | 16777216                         | Maximum individual file size passed to YARA in bytes                            |
 <!-- markdownlint-enable MD013 -->

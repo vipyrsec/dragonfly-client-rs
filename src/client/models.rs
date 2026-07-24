@@ -3,7 +3,7 @@ use serde::Serialize;
 use serde::{self, Deserialize};
 use std::collections::HashMap;
 use std::fmt::Display;
-use yara::{Compiler, Rules};
+use yara::{Compiler, Rules, ScanFlags};
 
 pub type ScanResult = Result<SubmitJobResultsSuccess, SubmitJobResultsError>;
 
@@ -79,9 +79,10 @@ impl RulesResponse {
             .collect::<Vec<&str>>()
             .join("\n");
 
-        let compiled_rules = Compiler::new()?
+        let mut compiled_rules = Compiler::new()?
             .add_rules_str(&rules_str)?
             .compile_rules()?;
+        compiled_rules.set_flags(ScanFlags::FAST_MODE);
 
         Ok(compiled_rules)
     }
