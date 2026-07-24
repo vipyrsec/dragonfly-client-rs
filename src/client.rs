@@ -11,6 +11,7 @@ use color_eyre::Result;
 use reqwest::{
     blocking::Client,
     header::{HeaderMap, HeaderValue},
+    redirect::Policy,
     Url,
 };
 use std::io;
@@ -90,6 +91,9 @@ fn build_api_http_client(client_id: &str, client_secret: &str) -> Result<Client>
 
     Ok(Client::builder()
         .gzip(true)
+        .redirect(Policy::custom(|attempt| {
+            attempt.error("Dragonfly API redirects are not allowed")
+        }))
         .default_headers(headers)
         .build()?)
 }
@@ -147,7 +151,7 @@ mod tests {
     const CLIENT_ID: &str = "test-client.access";
     const CLIENT_SECRET: &str = "test-secret";
 
-    fn serve_once() -> (String, mpsc::Receiver<String>) {
+    fn serve_once(response: String) -> (String, mpsc::Receiver<String>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         let (sender, receiver) = mpsc::channel();
@@ -169,11 +173,7 @@ mod tests {
             }
 
             sender.send(String::from_utf8(request).unwrap()).unwrap();
-            write!(
-                stream,
-                "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-            )
-            .unwrap();
+            stream.write_all(response.as_bytes()).unwrap();
         });
 
         (format!("http://{address}/example.tar.gz"), receiver)
@@ -181,7 +181,9 @@ mod tests {
 
     #[test]
     fn distribution_downloads_do_not_send_cloudflare_access_credentials() {
-        let (download_url, request) = serve_once();
+        let response =
+            String::from("HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+        let (download_url, request) = serve_once(response);
         let rules = Compiler::new()
             .unwrap()
             .add_rules_str("rule test_rule { condition: false }")
@@ -210,5 +212,28 @@ mod tests {
         assert!(!request.contains("\r\ncf-access-client-id:"));
         assert!(!request.contains("\r\ncf-access-client-secret:"));
         assert!(!request.contains("\r\nauthorization:"));
+    }
+
+    #[test]
+    fn api_client_rejects_redirects_before_forwarding_credentials() {
+        let redirect_target = TcpListener::bind("127.0.0.1:0").unwrap();
+        redirect_target.set_nonblocking(true).unwrap();
+        let target_url = format!("http://{}/capture", redirect_target.local_addr().unwrap());
+        let response = format!(
+            "HTTP/1.1 302 Found\r\nLocation: {target_url}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        );
+        let (api_url, source_request) = serve_once(response);
+        let api_client = build_api_http_client(CLIENT_ID, CLIENT_SECRET).unwrap();
+
+        let error = api_client.get(api_url).send().unwrap_err();
+
+        assert!(error.is_redirect());
+        assert_eq!(
+            redirect_target.accept().unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+        let source_request = source_request.recv().unwrap().to_ascii_lowercase();
+        assert!(source_request.contains("\r\ncf-access-client-id:"));
+        assert!(source_request.contains("\r\ncf-access-client-secret:"));
     }
 }
