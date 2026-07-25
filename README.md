@@ -112,9 +112,10 @@ stages each compressed distribution on temporary disk, validates its resource
 limits, and extracts it. Files are scanned individually from disk by YARA.
 Only the highest-scoring file and unique matched rules are retained for each
 distribution. After every distribution finishes, the client unions matched
-rules across the complete package, sums each unique rule's score once, and
-submits one package verdict to the API. The inspector URL identifies the
-highest-scoring file anywhere in the package.
+rule identifiers across the complete package and submits one package verdict
+to the API. Its score is the maximum independently calculated distribution
+score; evidence from mutually exclusive distributions is not added together.
+The inspector URL identifies the highest-scoring file in that distribution.
 
 The client requests at most one job per configured worker, up to
 `DRAGONFLY_BULK_SIZE`, and scans those packages concurrently. Each package's

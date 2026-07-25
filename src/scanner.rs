@@ -154,6 +154,11 @@ impl DistributionScanResults {
         self.matched_rules.iter().collect()
     }
 
+    /// Calculate the distribution score, counting each matched rule once.
+    pub fn get_total_score(&self) -> i64 {
+        self.matched_rules.iter().map(|rule| rule.score).sum()
+    }
+
     /// Get a vector of the **unique** rule identifiers this distribution matched
     #[cfg(test)]
     fn get_matched_rule_identifiers(&self) -> Vec<&str> {
@@ -203,27 +208,22 @@ impl PackageScanResults {
         let highest_score_distribution = self
             .distribution_scan_results
             .iter()
-            .filter(|distribution| distribution.get_most_malicious_file().is_some())
-            .max_by_key(|distribution| {
-                distribution
-                    .get_most_malicious_file()
-                    .map(FileScanResult::calculate_score)
-            });
+            .max_by_key(|distribution| distribution.get_total_score());
 
-        let matched_rules = self
-            .distribution_scan_results
-            .iter()
-            .flat_map(|distribution| &distribution.matched_rules)
-            .collect::<HashSet<_>>();
-
-        let score = matched_rules.iter().map(|rule| rule.score).sum();
+        let score = highest_score_distribution
+            .map(DistributionScanResults::get_total_score)
+            .unwrap_or_default();
 
         let inspector_url =
             highest_score_distribution.and_then(DistributionScanResults::inspector_url);
 
-        let mut rules_matched = matched_rules
+        let mut rules_matched = self
+            .distribution_scan_results
             .iter()
+            .flat_map(|distribution| &distribution.matched_rules)
             .map(|rule| rule.name.clone())
+            .collect::<HashSet<_>>()
+            .into_iter()
             .collect::<Vec<_>>();
         rules_matched.sort_unstable();
 
@@ -617,7 +617,7 @@ mod tests {
             body.inspector_url,
             Some(String::from("https://example.net/distrib2.whl"))
         );
-        assert_eq!(body.score, 23);
+        assert_eq!(body.score, 18);
         assert_eq!(
             HashSet::from([
                 "rule1".into(),

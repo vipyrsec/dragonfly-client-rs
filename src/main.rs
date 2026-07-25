@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use client::DragonflyClient;
 use color_eyre::eyre::{ensure, Result};
-use tracing::{error, info, span, trace, Level};
+use tracing::{error, info, span, trace, warn, Level};
 use tracing_subscriber::EnvFilter;
 
 use crate::{
@@ -17,39 +17,41 @@ use crate::{
     scanner::{scan_all_distributions, PackageScanResults},
 };
 
-fn scan_package(client: &DragonflyClient, job: Job) -> ScanResult {
+fn scan_package(client: &DragonflyClient, job: Job) -> Option<ScanResult> {
     let span = span!(Level::INFO, "Job", name = job.name, version = job.version);
     let _enter = span.enter();
 
     if job.hash != client.rules_state.hash {
-        return Err(SubmitJobResultsError {
-            name: job.name,
-            version: job.version,
-            reason: format!(
-                "job requires rules commit {}, but the scanner loaded {}",
-                job.hash, client.rules_state.hash
-            ),
-        });
+        warn!(
+            "Deferring job requiring rules commit {}; scanner loaded {}",
+            job.hash, client.rules_state.hash
+        );
+        // Do not submit a failure: mainframe will requeue the pending job after its timeout.
+        return None;
     }
 
-    match scan_all_distributions(client.download_client(), &client.rules_state.rules, &job) {
-        Ok(results) => {
-            let package_scan_results =
-                PackageScanResults::new(job.name, job.version, results, job.hash);
-            let body = package_scan_results.build_body();
+    let result =
+        match scan_all_distributions(client.download_client(), &client.rules_state.rules, &job) {
+            Ok(results) => {
+                let package_scan_results =
+                    PackageScanResults::new(job.name, job.version, results, job.hash);
+                let body = package_scan_results.build_body();
 
-            Ok(body)
-        }
-        Err(err) => Err(SubmitJobResultsError {
-            name: job.name,
-            version: job.version,
-            reason: format!("{err}"),
-        }),
-    }
+                Ok(body)
+            }
+            Err(err) => Err(SubmitJobResultsError {
+                name: job.name,
+                version: job.version,
+                reason: format!("{err}"),
+            }),
+        };
+    Some(result)
 }
 
 fn run_job(client: &DragonflyClient, job: Job) {
-    let scan_result = scan_package(client, job);
+    let Some(scan_result) = scan_package(client, job) else {
+        return;
+    };
     if let Err(err) = client.send_result(scan_result) {
         error!("Error while sending response to API: {err}");
     }
