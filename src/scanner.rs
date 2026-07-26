@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::{collections::HashSet, path::Path};
 
-use color_eyre::Result;
+use color_eyre::{eyre::ensure, Result};
 use reqwest::{blocking::Client, Url};
 use tempfile::TempDir;
 use walkdir::WalkDir;
@@ -11,6 +11,7 @@ use crate::{
     client::{download_distribution, Job, SubmitJobResultsSuccess},
     exts::RuleExt,
     utils::create_inspector_url,
+    APP_CONFIG,
 };
 
 #[derive(Debug, Hash, Eq, PartialEq, Clone)]
@@ -44,20 +45,17 @@ struct Distribution {
 }
 
 impl Distribution {
-    fn scan(&mut self, rules: &Rules) -> Result<DistributionScanResults> {
-        let mut file_scan_results: Vec<FileScanResult> = Vec::new();
+    fn scan(&mut self, rules: &Rules, max_scan_size: u64) -> Result<DistributionScanResults> {
+        let mut results = DistributionScanResults::empty(self.inspector_url.clone());
         for entry in WalkDir::new(self.dir.path())
             .into_iter()
             .filter_map(|dirent| dirent.into_iter().find(|de| de.file_type().is_file()))
         {
-            let file_scan_result = self.scan_file(entry.path(), rules)?;
-            file_scan_results.push(file_scan_result);
+            let file_scan_result = self.scan_file(entry.path(), rules, max_scan_size)?;
+            results.record(file_scan_result);
         }
 
-        Ok(DistributionScanResults::new(
-            file_scan_results,
-            self.inspector_url.clone(),
-        ))
+        Ok(results)
     }
 
     /// Scan a file given it's path, and compiled rules.
@@ -65,7 +63,13 @@ impl Distribution {
     /// # Arguments
     /// * `path` - The path of the file to scan.
     /// * `rules` - The compiled rule set to scan this file against
-    fn scan_file(&self, path: &Path, rules: &Rules) -> Result<FileScanResult> {
+    fn scan_file(&self, path: &Path, rules: &Rules, max_scan_size: u64) -> Result<FileScanResult> {
+        let file_size = path.metadata()?.len();
+        ensure!(
+            file_size <= max_scan_size,
+            "file {} is {file_size} bytes, exceeding the {max_scan_size}-byte scan limit",
+            path.display()
+        );
         let rules = rules
             .scan_file(path, 10)?
             .into_iter()
@@ -94,8 +98,11 @@ impl Distribution {
 /// Struct representing the results of a scanned distribution
 #[derive(Debug)]
 pub struct DistributionScanResults {
-    /// The scan results for each file in this distribution
-    file_scan_results: Vec<FileScanResult>,
+    /// The highest-scoring file in this distribution.
+    most_malicious_file: Option<FileScanResult>,
+
+    /// The unique rules matched across the distribution.
+    matched_rules: HashSet<RuleScore>,
 
     /// The inspector URL pointing to this distribution's base
     inspector_url: Url,
@@ -104,10 +111,32 @@ pub struct DistributionScanResults {
 impl DistributionScanResults {
     /// Create a new `DistributionScanResults` based off the results of its files and the base
     /// inspector URL for this distribution.
-    pub fn new(file_scan_results: Vec<FileScanResult>, inspector_url: Url) -> Self {
+    #[cfg(test)]
+    fn new(file_scan_results: Vec<FileScanResult>, inspector_url: Url) -> Self {
+        let mut results = Self::empty(inspector_url);
+        for file_scan_result in file_scan_results {
+            results.record(file_scan_result);
+        }
+        results
+    }
+
+    fn empty(inspector_url: Url) -> Self {
         Self {
-            file_scan_results,
+            most_malicious_file: None,
+            matched_rules: HashSet::new(),
             inspector_url,
+        }
+    }
+
+    fn record(&mut self, file_scan_result: FileScanResult) {
+        self.matched_rules
+            .extend(file_scan_result.rules.iter().cloned());
+        let should_replace = self
+            .most_malicious_file
+            .as_ref()
+            .is_none_or(|current| file_scan_result.calculate_score() >= current.calculate_score());
+        if should_replace {
+            self.most_malicious_file = Some(file_scan_result);
         }
     }
 
@@ -116,31 +145,24 @@ impl DistributionScanResults {
     /// This file with the greatest score is considered the most malicious. If multiple
     /// files have the same score, an arbitrary file is picked.
     pub fn get_most_malicious_file(&self) -> Option<&FileScanResult> {
-        self.file_scan_results
-            .iter()
-            .max_by_key(|i| i.calculate_score())
+        self.most_malicious_file.as_ref()
     }
 
     /// Get all **unique** `RuleScore` objects that were matched for this distribution
+    #[cfg(test)]
     fn get_matched_rules(&self) -> HashSet<&RuleScore> {
-        let mut rules: HashSet<&RuleScore> = HashSet::new();
-        for file_scan_result in &self.file_scan_results {
-            for rule in &file_scan_result.rules {
-                rules.insert(rule);
-            }
-        }
-
-        rules
+        self.matched_rules.iter().collect()
     }
 
-    /// Calculate the total score of this distribution, without counting duplicates twice
+    /// Calculate the distribution score, counting each matched rule once.
     pub fn get_total_score(&self) -> i64 {
-        self.get_matched_rules().iter().map(|rule| rule.score).sum()
+        self.matched_rules.iter().map(|rule| rule.score).sum()
     }
 
     /// Get a vector of the **unique** rule identifiers this distribution matched
-    pub fn get_matched_rule_identifiers(&self) -> Vec<&str> {
-        self.get_matched_rules()
+    #[cfg(test)]
+    fn get_matched_rule_identifiers(&self) -> Vec<&str> {
+        self.matched_rules
             .iter()
             .map(|rule| rule.name.as_str())
             .collect()
@@ -186,7 +208,7 @@ impl PackageScanResults {
         let highest_score_distribution = self
             .distribution_scan_results
             .iter()
-            .max_by_key(|distrib| distrib.get_total_score());
+            .max_by_key(|distribution| distribution.get_total_score());
 
         let score = highest_score_distribution
             .map(DistributionScanResults::get_total_score)
@@ -195,15 +217,15 @@ impl PackageScanResults {
         let inspector_url =
             highest_score_distribution.and_then(DistributionScanResults::inspector_url);
 
-        // collect all rule identifiers into a HashSet to dedup, then convert to Vec
-        let rules_matched = self
+        let mut rules_matched = self
             .distribution_scan_results
             .iter()
-            .flat_map(DistributionScanResults::get_matched_rule_identifiers)
-            .map(std::string::ToString::to_string)
-            .collect::<HashSet<String>>()
+            .flat_map(|distribution| &distribution.matched_rules)
+            .map(|rule| rule.name.clone())
+            .collect::<HashSet<_>>()
             .into_iter()
-            .collect();
+            .collect::<Vec<_>>();
+        rules_matched.sort_unstable();
 
         SubmitJobResultsSuccess {
             name: self.name.clone(),
@@ -224,6 +246,12 @@ pub fn scan_all_distributions(
     rules: &Rules,
     job: &Job,
 ) -> Result<Vec<DistributionScanResults>> {
+    ensure!(
+        job.distributions.len() <= APP_CONFIG.max_distributions,
+        "package contains {} distributions, exceeding the {}-distribution limit",
+        job.distributions.len(),
+        APP_CONFIG.max_distributions
+    );
     let mut distribution_scan_results = Vec::with_capacity(job.distributions.len());
     for distribution in &job.distributions {
         let download_url: Url = distribution.parse().unwrap();
@@ -232,7 +260,7 @@ pub fn scan_all_distributions(
         let dir = download_distribution(http_client, download_url.clone())?;
 
         let mut dist = Distribution { dir, inspector_url };
-        let distribution_scan_result = dist.scan(rules)?;
+        let distribution_scan_result = dist.scan(rules, APP_CONFIG.max_scan_size)?;
         distribution_scan_results.push(distribution_scan_result);
     }
 
@@ -243,7 +271,7 @@ pub fn scan_all_distributions(
 mod tests {
     use super::{DistributionScanResults, PackageScanResults};
     use crate::{
-        client::{ScanResultSerializer, SubmitJobResultsError, SubmitJobResultsSuccess},
+        client::{Job, ScanResultSerializer, SubmitJobResultsError, SubmitJobResultsSuccess},
         scanner::{FileScanResult, RuleScore},
     };
     use std::io::Write;
@@ -330,10 +358,10 @@ mod tests {
             },
         ];
 
-        let distribution_scan_results = DistributionScanResults {
+        let distribution_scan_results = DistributionScanResults::new(
             file_scan_results,
-            inspector_url: reqwest::Url::parse("https://example.net").unwrap(),
-        };
+            reqwest::Url::parse("https://example.net").unwrap(),
+        );
 
         assert_eq!(
             distribution_scan_results
@@ -343,6 +371,51 @@ mod tests {
                 .name,
             "rule2"
         );
+    }
+
+    #[test]
+    fn distribution_results_retain_only_the_highest_scoring_file() {
+        let file_scan_results = (0..100)
+            .map(|index| FileScanResult {
+                path: PathBuf::from(format!("file-{index}")),
+                rules: Vec::new(),
+            })
+            .collect();
+
+        let results = DistributionScanResults::new(
+            file_scan_results,
+            reqwest::Url::parse("https://example.net").unwrap(),
+        );
+
+        assert!(results.matched_rules.is_empty());
+        assert_eq!(
+            results.get_most_malicious_file().unwrap().path,
+            PathBuf::from("file-99")
+        );
+    }
+
+    #[test]
+    fn package_distribution_count_is_bounded_before_downloads() {
+        let rules = Compiler::new()
+            .unwrap()
+            .add_rules_str("rule never { condition: false }")
+            .unwrap()
+            .compile_rules()
+            .unwrap();
+        let job = Job {
+            hash: String::new(),
+            name: "large-package".into(),
+            version: "1.0.0".into(),
+            distributions: vec![
+                "https://example.com/distribution.whl".into();
+                crate::APP_CONFIG.max_distributions + 1
+            ],
+        };
+
+        let error = super::scan_all_distributions(&reqwest::blocking::Client::new(), &rules, &job)
+            .unwrap_err();
+
+        assert!(error.to_string().contains("distribution limit"));
     }
 
     #[test]
@@ -389,10 +462,10 @@ mod tests {
             },
         ];
 
-        let distribution_scan_results = DistributionScanResults {
+        let distribution_scan_results = DistributionScanResults::new(
             file_scan_results,
-            inspector_url: reqwest::Url::parse("https://example.net").unwrap(),
-        };
+            reqwest::Url::parse("https://example.net").unwrap(),
+        );
 
         let matched_rules: HashSet<RuleScore> = distribution_scan_results
             .get_matched_rules()
@@ -466,10 +539,10 @@ mod tests {
             },
         ];
 
-        let distribution_scan_results = DistributionScanResults {
+        let distribution_scan_results = DistributionScanResults::new(
             file_scan_results,
-            inspector_url: reqwest::Url::parse("https://example.net").unwrap(),
-        };
+            reqwest::Url::parse("https://example.net").unwrap(),
+        );
 
         let matched_rule_identifiers = distribution_scan_results.get_matched_rule_identifiers();
 
@@ -499,18 +572,24 @@ mod tests {
                 }],
             },
         ];
-        let distribution_scan_results1 = DistributionScanResults {
-            file_scan_results: file_scan_results1,
-            inspector_url: reqwest::Url::parse("https://example.net/distrib1.tar.gz").unwrap(),
-        };
+        let distribution_scan_results1 = DistributionScanResults::new(
+            file_scan_results1,
+            reqwest::Url::parse("https://example.net/distrib1.tar.gz").unwrap(),
+        );
 
         let file_scan_results2 = vec![
             FileScanResult {
                 path: PathBuf::default(),
-                rules: vec![RuleScore {
-                    name: String::from("rule3"),
-                    score: 2,
-                }],
+                rules: vec![
+                    RuleScore {
+                        name: String::from("rule2"),
+                        score: 7,
+                    },
+                    RuleScore {
+                        name: String::from("rule3"),
+                        score: 2,
+                    },
+                ],
             },
             FileScanResult {
                 path: PathBuf::default(),
@@ -520,10 +599,10 @@ mod tests {
                 }],
             },
         ];
-        let distribution_scan_results2 = DistributionScanResults {
-            file_scan_results: file_scan_results2,
-            inspector_url: reqwest::Url::parse("https://example.net/distrib2.whl").unwrap(),
-        };
+        let distribution_scan_results2 = DistributionScanResults::new(
+            file_scan_results2,
+            reqwest::Url::parse("https://example.net/distrib2.whl").unwrap(),
+        );
 
         let package_scan_results = PackageScanResults {
             name: String::from("remmy"),
@@ -536,9 +615,9 @@ mod tests {
 
         assert_eq!(
             body.inspector_url,
-            Some(String::from("https://example.net/distrib1.tar.gz"))
+            Some(String::from("https://example.net/distrib2.whl"))
         );
-        assert_eq!(body.score, 12);
+        assert_eq!(body.score, 18);
         assert_eq!(
             HashSet::from([
                 "rule1".into(),
@@ -579,7 +658,7 @@ mod tests {
             inspector_url: "https://example.com".parse().unwrap(),
         };
 
-        let result = distro.scan_file(tmpfile.path(), &rules).unwrap();
+        let result = distro.scan_file(tmpfile.path(), &rules, 1024).unwrap();
 
         assert_eq!(
             result.rules[0],
@@ -589,6 +668,27 @@ mod tests {
             }
         );
         assert_eq!(result.calculate_score(), 5);
+    }
+
+    #[test]
+    fn scan_file_rejects_files_over_the_limit_before_yara() {
+        let rules = Compiler::new()
+            .unwrap()
+            .add_rules_str("rule never { condition: false }")
+            .unwrap()
+            .compile_rules()
+            .unwrap();
+        let tempdir = tempdir().unwrap();
+        let mut tmpfile = tempfile::NamedTempFile::new_in(tempdir.path()).unwrap();
+        tmpfile.write_all(b"12345").unwrap();
+        let distro = super::Distribution {
+            dir: tempdir,
+            inspector_url: "https://example.com".parse().unwrap(),
+        };
+
+        let error = distro.scan_file(tmpfile.path(), &rules, 4).unwrap_err();
+
+        assert!(error.to_string().contains("4-byte scan limit"));
     }
 
     #[test]
@@ -634,8 +734,8 @@ mod tests {
             inspector_url: "https://example.com".parse().unwrap(),
         };
 
-        let results = distro.scan(&rules).unwrap();
+        let results = distro.scan(&rules, 1024).unwrap();
 
-        assert_eq!(results.file_scan_results.len(), 1);
+        assert_eq!(results.get_most_malicious_file().unwrap().rules.len(), 1);
     }
 }

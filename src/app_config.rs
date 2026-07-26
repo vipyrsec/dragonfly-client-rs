@@ -6,6 +6,8 @@ use figment::{
 };
 use serde::{Deserialize, Serialize};
 
+const MEBIBYTE: u64 = 1024 * 1024;
+
 #[derive(Serialize, Deserialize)]
 pub struct AppConfig {
     pub base_url: String,
@@ -14,6 +16,10 @@ pub struct AppConfig {
     pub bulk_size: usize,
     pub cf_access_client_id: String,
     pub cf_access_client_secret: String,
+    pub max_archive_entries: usize,
+    pub max_distributions: usize,
+    pub max_download_size: u64,
+    pub max_expanded_size: u64,
     pub max_scan_size: u64,
 }
 
@@ -29,7 +35,11 @@ impl Default for AppConfig {
             threads: available_parallelism,
             bulk_size: 20,
             load_duration: 60,
-            max_scan_size: 1.28e+8 as u64, // 128 MB
+            max_archive_entries: 4096,
+            max_distributions: 32,
+            max_download_size: 32 * MEBIBYTE,
+            max_expanded_size: 64 * MEBIBYTE,
+            max_scan_size: 16 * MEBIBYTE,
         }
     }
 }

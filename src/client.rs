@@ -7,14 +7,39 @@ pub use models::*;
 use tempfile::{tempdir, tempfile, TempDir};
 
 use crate::APP_CONFIG;
-use color_eyre::Result;
+use color_eyre::{
+    eyre::{bail, ensure},
+    Result,
+};
 use reqwest::{
     blocking::Client,
     header::{HeaderMap, HeaderValue},
     redirect::Policy,
     Url,
 };
-use std::io;
+use std::{
+    fs::File,
+    io::{self, Read, Seek},
+};
+
+#[derive(Clone, Copy)]
+struct ArchiveLimits {
+    entries: usize,
+    download_size: u64,
+    expanded_size: u64,
+    scan_size: u64,
+}
+
+impl ArchiveLimits {
+    fn configured() -> Self {
+        Self {
+            entries: APP_CONFIG.max_archive_entries,
+            download_size: APP_CONFIG.max_download_size,
+            expanded_size: APP_CONFIG.max_expanded_size,
+            scan_size: APP_CONFIG.max_scan_size,
+        }
+    }
+}
 
 pub struct RulesState {
     pub rules: yara::Rules,
@@ -61,17 +86,12 @@ impl DragonflyClient {
         Ok(())
     }
 
-    pub fn bulk_get_job(&mut self, n_jobs: usize) -> reqwest::Result<Vec<Job>> {
+    pub fn bulk_get_job(&self, n_jobs: usize) -> reqwest::Result<Vec<Job>> {
         fetch_bulk_job(&self.api_client, &self.base_url, n_jobs)
     }
 
-    pub fn get_job(&mut self) -> reqwest::Result<Option<Job>> {
-        // not `slice::first` because we want to own the Job
-        self.bulk_get_job(1).map(|jobs| jobs.into_iter().nth(0))
-    }
-
     /// Send a [`crate::client::models::ScanResult`] to mainframe
-    pub fn send_result(&mut self, body: models::ScanResult) -> reqwest::Result<()> {
+    pub fn send_result(&self, body: models::ScanResult) -> reqwest::Result<()> {
         send_result(&self.api_client, &self.base_url, body)
     }
 
@@ -102,23 +122,155 @@ fn build_download_http_client() -> reqwest::Result<Client> {
     Client::builder().gzip(true).build()
 }
 
-/// Download and unpack a tarball, return the [`TempDir`] containing the contents.
-fn extract_tarball<R: io::Read>(response: R) -> Result<TempDir> {
-    let mut tarball = tar::Archive::new(GzDecoder::new(response));
+fn stage_download<R: Read>(response: R, limit: u64) -> Result<File> {
+    let read_limit = limit
+        .checked_add(1)
+        .ok_or_else(|| color_eyre::eyre::eyre!("download size limit is too large"))?;
+    let mut file = tempfile()?;
+    let downloaded = io::copy(&mut response.take(read_limit), &mut file)?;
+    ensure!(
+        downloaded <= limit,
+        "compressed distribution exceeds the {limit}-byte download limit"
+    );
+    file.rewind()?;
+
+    Ok(file)
+}
+
+/// Unpack a tarball within the configured resource limits.
+fn extract_tarball(file: File, limits: ArchiveLimits) -> Result<TempDir> {
+    let mut tarball = tar::Archive::new(GzDecoder::new(file));
     let tmpdir = tempdir()?;
-    tarball.unpack(tmpdir.path())?;
+    let mut entries = 0_usize;
+    let mut expanded_size = 0_u64;
+
+    for entry in tarball.entries()? {
+        let mut entry = entry?;
+        entries = entries
+            .checked_add(1)
+            .ok_or_else(|| color_eyre::eyre::eyre!("tar entry count overflowed"))?;
+        ensure!(
+            entries <= limits.entries,
+            "tar archive exceeds the {}-entry limit",
+            limits.entries
+        );
+
+        let entry_size = entry.size();
+        ensure!(
+            entry_size <= limits.scan_size,
+            "tar entry {} is {entry_size} bytes, exceeding the {}-byte scan limit",
+            entry.path()?.display(),
+            limits.scan_size
+        );
+        expanded_size = expanded_size
+            .checked_add(entry_size)
+            .ok_or_else(|| color_eyre::eyre::eyre!("expanded tar size overflowed"))?;
+        ensure!(
+            expanded_size <= limits.expanded_size,
+            "tar archive exceeds the {}-byte expanded-size limit",
+            limits.expanded_size
+        );
+        ensure!(
+            entry.unpack_in(tmpdir.path())?,
+            "tar entry would unpack outside the temporary directory"
+        );
+    }
+
     Ok(tmpdir)
 }
 
-/// Download and extract a zip, return the [`TempDir`] containing the contents.
-fn extract_zipfile<R: io::Read>(mut response: R) -> Result<TempDir> {
-    let mut file = tempfile()?;
+fn zip_entry_count(file: &mut File) -> Result<usize> {
+    const END_HEADER_SIZE: usize = 22;
+    const MAX_COMMENT_SIZE: usize = u16::MAX as usize;
+    const SIGNATURE: [u8; 4] = [0x50, 0x4b, 0x05, 0x06];
 
-    // first write the archive to a file because `response` isn't Seek, which is needed by
-    // `zip::ZipArchive::new`
-    io::copy(&mut response, &mut file)?;
+    let file_size = file.seek(io::SeekFrom::End(0))?;
+    let tail_size = file_size.min((END_HEADER_SIZE + MAX_COMMENT_SIZE) as u64);
+    file.seek(io::SeekFrom::End(
+        -i64::try_from(tail_size).expect("ZIP footer window fits in i64"),
+    ))?;
 
+    let mut tail = vec![0_u8; usize::try_from(tail_size)?];
+    file.read_exact(&mut tail)?;
+    let Some(header_start) =
+        (0..=tail.len().saturating_sub(SIGNATURE.len()))
+            .rev()
+            .find(|&index| {
+                if tail[index..].get(..SIGNATURE.len()) != Some(&SIGNATURE) {
+                    return false;
+                }
+                let Some(comment_size) = tail
+                    .get(index + 20..index + 22)
+                    .map(|bytes| u16::from_le_bytes([bytes[0], bytes[1]]) as usize)
+                else {
+                    return false;
+                };
+                tail.len() - index == END_HEADER_SIZE + comment_size
+            })
+    else {
+        bail!("ZIP end-of-central-directory record is missing");
+    };
+    let header = &tail[header_start..];
+    let disk_number = u16::from_le_bytes([header[4], header[5]]);
+    let directory_disk = u16::from_le_bytes([header[6], header[7]]);
+    let entries_on_disk = u16::from_le_bytes([header[8], header[9]]);
+    let entries = u16::from_le_bytes([header[10], header[11]]);
+    ensure!(
+        disk_number == 0 && directory_disk == 0 && entries_on_disk == entries,
+        "multi-disk ZIP archives are not supported"
+    );
+    ensure!(
+        entries != u16::MAX,
+        "ZIP64 archives are not accepted in the constrained scanner"
+    );
+    file.rewind()?;
+
+    Ok(entries as usize)
+}
+
+/// Extract a ZIP archive within the configured resource limits.
+fn extract_zipfile(mut file: File, limits: ArchiveLimits) -> Result<TempDir> {
+    let entry_count = zip_entry_count(&mut file)?;
+    ensure!(
+        entry_count <= limits.entries,
+        "ZIP archive contains {entry_count} entries, exceeding the {}-entry limit",
+        limits.entries
+    );
     let mut zip = zip::ZipArchive::new(file)?;
+    ensure!(
+        zip.len() == entry_count,
+        "ZIP central-directory entry count changed while parsing"
+    );
+
+    let mut expanded_size = 0_u64;
+    for index in 0..zip.len() {
+        let entry = zip.by_index(index)?;
+        ensure!(
+            matches!(
+                entry.compression(),
+                zip::CompressionMethod::Stored | zip::CompressionMethod::Deflated
+            ),
+            "ZIP entry {} uses unsupported compression method {:?}",
+            entry.name(),
+            entry.compression()
+        );
+        let entry_size = entry.size();
+        ensure!(
+            entry_size <= limits.scan_size,
+            "ZIP entry {} is {entry_size} bytes, exceeding the {}-byte scan limit",
+            entry.name(),
+            limits.scan_size
+        );
+        expanded_size = expanded_size
+            .checked_add(entry_size)
+            .ok_or_else(|| color_eyre::eyre::eyre!("expanded ZIP size overflowed"))?;
+        ensure!(
+            expanded_size <= limits.expanded_size,
+            "ZIP archive exceeds the {}-byte expanded-size limit",
+            limits.expanded_size
+        );
+    }
+
     let tmpdir = tempdir()?;
     zip.extract(tmpdir.path())?;
 
@@ -126,30 +278,66 @@ fn extract_zipfile<R: io::Read>(mut response: R) -> Result<TempDir> {
 }
 
 pub fn download_distribution(http_client: &Client, download_url: Url) -> Result<TempDir> {
-    // This conversion is fast as per the docs
     let is_tarball = download_url.as_str().ends_with(".tar.gz");
-    let response = http_client.get(download_url).send()?;
+    let response = http_client.get(download_url).send()?.error_for_status()?;
+    let limits = ArchiveLimits::configured();
+    let file = stage_download(response, limits.download_size)?;
 
     if is_tarball {
-        extract_tarball(response)
+        extract_tarball(file, limits)
     } else {
-        extract_zipfile(response)
+        extract_zipfile(file, limits)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{build_api_http_client, build_download_http_client, DragonflyClient, RulesState};
+    use super::{
+        build_api_http_client, build_download_http_client, extract_tarball, extract_zipfile,
+        stage_download, ArchiveLimits, DragonflyClient, RulesState,
+    };
+    use flate2::{write::GzEncoder, Compression};
     use std::{
-        io::{Read, Write},
+        io::{Cursor, Read, Write},
         net::TcpListener,
         sync::mpsc,
         thread,
     };
     use yara::Compiler;
+    use zip::{write::SimpleFileOptions, ZipWriter};
 
     const CLIENT_ID: &str = "test-client.access";
     const CLIENT_SECRET: &str = "test-secret";
+
+    fn archive_limits() -> ArchiveLimits {
+        ArchiveLimits {
+            entries: 4,
+            download_size: 1024,
+            expanded_size: 1024,
+            scan_size: 1024,
+        }
+    }
+
+    fn build_zip(files: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut zip = ZipWriter::new(Cursor::new(Vec::new()));
+        for (name, contents) in files {
+            zip.start_file(*name, SimpleFileOptions::default()).unwrap();
+            zip.write_all(contents).unwrap();
+        }
+        zip.finish().unwrap().into_inner()
+    }
+
+    fn build_tarball(files: &[(&str, &[u8])]) -> Vec<u8> {
+        let encoder = GzEncoder::new(Vec::new(), Compression::fast());
+        let mut tarball = tar::Builder::new(encoder);
+        for (name, contents) in files {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(contents.len().try_into().unwrap());
+            header.set_cksum();
+            tarball.append_data(&mut header, name, *contents).unwrap();
+        }
+        tarball.into_inner().unwrap().finish().unwrap()
+    }
 
     fn serve_once(response: String) -> (String, mpsc::Receiver<String>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -235,5 +423,68 @@ mod tests {
         let source_request = source_request.recv().unwrap().to_ascii_lowercase();
         assert!(source_request.contains("\r\ncf-access-client-id:"));
         assert!(source_request.contains("\r\ncf-access-client-secret:"));
+    }
+
+    #[test]
+    fn stage_download_rejects_oversized_input() {
+        let error = stage_download(Cursor::new(vec![0_u8; 5]), 4).unwrap_err();
+
+        assert!(error.to_string().contains("4-byte download limit"));
+    }
+
+    #[test]
+    fn zip_entry_limit_is_checked_before_extraction() {
+        let bytes = build_zip(&[("one", b"1"), ("two", b"2")]);
+        let file = stage_download(Cursor::new(bytes), 1024).unwrap();
+        let limits = ArchiveLimits {
+            entries: 1,
+            ..archive_limits()
+        };
+
+        let error = extract_zipfile(file, limits).unwrap_err();
+
+        assert!(error.to_string().contains("2 entries"));
+    }
+
+    #[test]
+    fn zip_expanded_size_is_bounded() {
+        let bytes = build_zip(&[("one", b"1234"), ("two", b"5678")]);
+        let file = stage_download(Cursor::new(bytes), 1024).unwrap();
+        let limits = ArchiveLimits {
+            expanded_size: 7,
+            ..archive_limits()
+        };
+
+        let error = extract_zipfile(file, limits).unwrap_err();
+
+        assert!(error.to_string().contains("expanded-size limit"));
+    }
+
+    #[test]
+    fn zip_file_scan_size_is_bounded() {
+        let bytes = build_zip(&[("large", b"12345")]);
+        let file = stage_download(Cursor::new(bytes), 1024).unwrap();
+        let limits = ArchiveLimits {
+            scan_size: 4,
+            ..archive_limits()
+        };
+
+        let error = extract_zipfile(file, limits).unwrap_err();
+
+        assert!(error.to_string().contains("4-byte scan limit"));
+    }
+
+    #[test]
+    fn tar_expanded_size_is_bounded() {
+        let bytes = build_tarball(&[("one", b"1234"), ("two", b"5678")]);
+        let file = stage_download(Cursor::new(bytes), 1024).unwrap();
+        let limits = ArchiveLimits {
+            expanded_size: 7,
+            ..archive_limits()
+        };
+
+        let error = extract_tarball(file, limits).unwrap_err();
+
+        assert!(error.to_string().contains("expanded-size limit"));
     }
 }
