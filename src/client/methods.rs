@@ -144,6 +144,8 @@ mod tests {
         let result = Err(SubmitJobResultsError {
             name: "example".to_owned(),
             version: "1.0.0".to_owned(),
+            attempt: 2,
+            assignment_id: "0962b72e-f197-41c3-a059-e10fdc149cce".to_owned(),
             reason: "test failure".to_owned(),
         });
 
@@ -152,6 +154,8 @@ mod tests {
         let request = request.recv().unwrap();
         assert!(request.starts_with("PUT /package HTTP/1.1\r\n"));
         assert_cloudflare_access_headers(&request);
-        assert!(request.contains(r#"{"name":"example","version":"1.0.0","reason":"test failure"}"#));
+        assert!(request.contains(
+            r#"{"name":"example","version":"1.0.0","attempt":2,"assignment_id":"0962b72e-f197-41c3-a059-e10fdc149cce","reason":"test failure"}"#
+        ));
     }
 }

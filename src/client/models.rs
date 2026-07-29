@@ -28,6 +28,8 @@ impl From<ScanResult> for ScanResultSerializer {
 pub struct SubmitJobResultsSuccess {
     pub name: String,
     pub version: String,
+    pub attempt: u64,
+    pub assignment_id: String,
     pub score: i64,
     pub inspector_url: Option<String>,
 
@@ -38,10 +40,12 @@ pub struct SubmitJobResultsSuccess {
     pub commit: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, PartialEq)]
 pub struct SubmitJobResultsError {
     pub name: String,
     pub version: String,
+    pub attempt: u64,
+    pub assignment_id: String,
     pub reason: String,
 }
 
@@ -55,12 +59,14 @@ impl Display for SubmitJobResultsError {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, PartialEq)]
 pub struct Job {
     pub hash: String,
     pub name: String,
     pub version: String,
     pub distributions: Vec<String>,
+    pub attempt: u64,
+    pub assignment_id: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -85,5 +91,42 @@ impl RulesResponse {
         compiled_rules.set_flags(ScanFlags::FAST_MODE);
 
         Ok(compiled_rules)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Job;
+
+    #[test]
+    fn job_deserializes_assignment_lease() {
+        let job: Job = serde_json::from_str(
+            r#"{
+                "hash": "rules-commit",
+                "name": "example",
+                "version": "1.2.3",
+                "distributions": ["https://example.com/example.whl"],
+                "attempt": 2,
+                "assignment_id": "4e3702e8-27a3-46e6-b51c-4779a94fa4ab"
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(job.attempt, 2);
+        assert_eq!(job.assignment_id, "4e3702e8-27a3-46e6-b51c-4779a94fa4ab");
+    }
+
+    #[test]
+    fn job_requires_assignment_lease() {
+        let result = serde_json::from_str::<Job>(
+            r#"{
+                "hash": "rules-commit",
+                "name": "example",
+                "version": "1.2.3",
+                "distributions": []
+            }"#,
+        );
+
+        assert!(result.is_err());
     }
 }

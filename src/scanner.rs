@@ -184,6 +184,8 @@ impl DistributionScanResults {
 pub struct PackageScanResults {
     pub name: String,
     pub version: String,
+    pub attempt: u64,
+    pub assignment_id: String,
     pub distribution_scan_results: Vec<DistributionScanResults>,
     pub commit_hash: String,
 }
@@ -192,12 +194,16 @@ impl PackageScanResults {
     pub fn new(
         name: String,
         version: String,
+        attempt: u64,
+        assignment_id: String,
         distribution_scan_results: Vec<DistributionScanResults>,
         commit_hash: String,
     ) -> Self {
         Self {
             name,
             version,
+            attempt,
+            assignment_id,
             distribution_scan_results,
             commit_hash,
         }
@@ -230,6 +236,8 @@ impl PackageScanResults {
         SubmitJobResultsSuccess {
             name: self.name.clone(),
             version: self.version.clone(),
+            attempt: self.attempt,
+            assignment_id: self.assignment_id.clone(),
             score,
             inspector_url,
             rules_matched,
@@ -284,6 +292,8 @@ mod tests {
         let success = SubmitJobResultsSuccess {
             name: "test".into(),
             version: "1.0.0".into(),
+            attempt: 2,
+            assignment_id: "4e3702e8-27a3-46e6-b51c-4779a94fa4ab".into(),
             score: 10,
             inspector_url: Some("inspector url".into()),
             rules_matched: vec!["abc".into(), "def".into()],
@@ -292,7 +302,7 @@ mod tests {
 
         let scan_result: ScanResultSerializer = Ok(success).into();
         let actual = serde_json::to_string(&scan_result).unwrap();
-        let expected = r#"{"name":"test","version":"1.0.0","score":10,"inspector_url":"inspector url","rules_matched":["abc","def"],"commit":"commit hash"}"#;
+        let expected = r#"{"name":"test","version":"1.0.0","attempt":2,"assignment_id":"4e3702e8-27a3-46e6-b51c-4779a94fa4ab","score":10,"inspector_url":"inspector url","rules_matched":["abc","def"],"commit":"commit hash"}"#;
 
         assert_eq!(actual, expected);
     }
@@ -302,12 +312,14 @@ mod tests {
         let error = SubmitJobResultsError {
             name: "test".into(),
             version: "1.0.0".into(),
+            attempt: 3,
+            assignment_id: "a58c83d7-0864-48da-b3d1-e7ae59ac9572".into(),
             reason: "Package too large".into(),
         };
 
         let scan_result: ScanResultSerializer = Err(error).into();
         let actual = serde_json::to_string(&scan_result).unwrap();
-        let expected = r#"{"name":"test","version":"1.0.0","reason":"Package too large"}"#;
+        let expected = r#"{"name":"test","version":"1.0.0","attempt":3,"assignment_id":"a58c83d7-0864-48da-b3d1-e7ae59ac9572","reason":"Package too large"}"#;
 
         assert_eq!(actual, expected);
     }
@@ -410,6 +422,8 @@ mod tests {
                 "https://example.com/distribution.whl".into();
                 crate::APP_CONFIG.max_distributions + 1
             ],
+            attempt: 1,
+            assignment_id: "d4d10b9b-f0ea-44dc-9d21-33c0ae9ed3c0".into(),
         };
 
         let error = super::scan_all_distributions(&reqwest::blocking::Client::new(), &rules, &job)
@@ -607,6 +621,8 @@ mod tests {
         let package_scan_results = PackageScanResults {
             name: String::from("remmy"),
             version: String::from("4.20.69"),
+            attempt: 2,
+            assignment_id: String::from("e42e7f1e-1de7-443e-ad34-3ebdff663605"),
             distribution_scan_results: vec![distribution_scan_results1, distribution_scan_results2],
             commit_hash: String::from("abc"),
         };
@@ -618,6 +634,8 @@ mod tests {
             Some(String::from("https://example.net/distrib2.whl"))
         );
         assert_eq!(body.score, 18);
+        assert_eq!(body.attempt, 2);
+        assert_eq!(body.assignment_id, "e42e7f1e-1de7-443e-ad34-3ebdff663605");
         assert_eq!(
             HashSet::from([
                 "rule1".into(),
