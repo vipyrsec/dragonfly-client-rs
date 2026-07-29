@@ -4,11 +4,11 @@ mod exts;
 mod scanner;
 mod utils;
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use client::DragonflyClient;
 use color_eyre::eyre::{ensure, Result};
-use tracing::{error, info, span, trace, warn, Level};
+use tracing::{error, info, span, warn, Level};
 use tracing_subscriber::EnvFilter;
 
 use crate::{
@@ -17,12 +17,12 @@ use crate::{
     scanner::{scan_all_distributions, PackageScanResults},
 };
 
-fn scan_package(client: &DragonflyClient, job: Job) -> Option<ScanResult> {
-    let span = span!(Level::INFO, "Job", name = job.name, version = job.version);
-    let _enter = span.enter();
-
+fn scan_package(client: &DragonflyClient, job: &Job) -> Option<ScanResult> {
     if job.hash != client.rules_state.hash {
         warn!(
+            event = "scan_deferred",
+            required_rules_commit = %job.hash,
+            loaded_rules_commit = %client.rules_state.hash,
             "Deferring job requiring rules commit {}; scanner loaded {}",
             job.hash, client.rules_state.hash
         );
@@ -30,44 +30,109 @@ fn scan_package(client: &DragonflyClient, job: Job) -> Option<ScanResult> {
         return None;
     }
 
+    info!(
+        event = "scan_started",
+        distribution_count = job.distributions.len(),
+        rules_commit = %job.hash,
+        "Started package scan"
+    );
+
     let result =
-        match scan_all_distributions(client.download_client(), &client.rules_state.rules, &job) {
+        match scan_all_distributions(client.download_client(), &client.rules_state.rules, job) {
             Ok(results) => {
-                let package_scan_results =
-                    PackageScanResults::new(job.name, job.version, results, job.hash);
+                let package_scan_results = PackageScanResults::new(
+                    job.name.clone(),
+                    job.version.clone(),
+                    job.attempt,
+                    job.assignment_id.clone(),
+                    results,
+                    job.hash.clone(),
+                );
                 let body = package_scan_results.build_body();
 
                 Ok(body)
             }
             Err(err) => Err(SubmitJobResultsError {
-                name: job.name,
-                version: job.version,
+                name: job.name.clone(),
+                version: job.version.clone(),
+                attempt: job.attempt,
+                assignment_id: job.assignment_id.clone(),
                 reason: format!("{err}"),
             }),
         };
     Some(result)
 }
 
-fn run_job(client: &DragonflyClient, job: Job) {
+fn run_job(client: &DragonflyClient, job: &Job) {
+    let span = span!(
+        Level::INFO,
+        "scan_job",
+        package = %job.name,
+        version = %job.version,
+        attempt = job.attempt,
+        assignment_id = %job.assignment_id,
+    );
+    let _enter = span.enter();
+    let started_at = Instant::now();
+
     let Some(scan_result) = scan_package(client, job) else {
         return;
     };
-    if let Err(err) = client.send_result(scan_result) {
-        error!("Error while sending response to API: {err}");
+
+    let outcome = match &scan_result {
+        Ok(result) => {
+            info!(
+                event = "scan_completed",
+                elapsed_ms = started_at.elapsed().as_millis(),
+                distribution_count = job.distributions.len(),
+                score = result.score,
+                matched_rule_count = result.rules_matched.len(),
+                "Completed package scan"
+            );
+            "finished"
+        }
+        Err(result) => {
+            error!(
+                event = "scan_failed",
+                elapsed_ms = started_at.elapsed().as_millis(),
+                distribution_count = job.distributions.len(),
+                reason = %result.reason,
+                "Package scan failed"
+            );
+            "failed"
+        }
+    };
+
+    match client.send_result(scan_result) {
+        Ok(()) => info!(
+            event = "result_submitted",
+            elapsed_ms = started_at.elapsed().as_millis(),
+            outcome,
+            "Submitted package scan result"
+        ),
+        Err(err) => {
+            error!(
+                event = "result_submission_failed",
+                elapsed_ms = started_at.elapsed().as_millis(),
+                outcome,
+                error = %err,
+                "Error while sending package scan result to API"
+            );
+        }
     }
 }
 
 fn run_jobs(client: &DragonflyClient, jobs: Vec<Job>, worker_count: usize) {
     if worker_count == 1 {
         for job in jobs {
-            run_job(client, job);
+            run_job(client, &job);
         }
         return;
     }
 
     std::thread::scope(|scope| {
         for job in jobs {
-            scope.spawn(move || run_job(client, job));
+            scope.spawn(move || run_job(client, &job));
         }
     });
 }
@@ -100,7 +165,11 @@ fn main() -> Result<()> {
                 std::thread::sleep(Duration::from_secs(APP_CONFIG.load_duration));
             }
             Ok(jobs) => {
-                trace!("Successfully fetched {} jobs", jobs.len());
+                info!(
+                    event = "jobs_fetched",
+                    job_count = jobs.len(),
+                    "Fetched package scan jobs"
+                );
 
                 if jobs.iter().any(|job| job.hash != client.rules_state.hash) {
                     info!(
