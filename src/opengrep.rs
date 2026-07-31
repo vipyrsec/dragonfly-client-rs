@@ -19,7 +19,7 @@ use tempfile::{tempdir, tempfile, TempDir};
 use crate::{
     app_config::APP_CONFIG,
     client::{
-        build_api_http_client, build_download_http_client, download_distribution,
+        build_api_http_client, build_download_http_client, download_distribution_with_timeout,
         fetch_opengrep_jobs, fetch_opengrep_rules, send_opengrep_result, Job, OpenGrepFinding,
         OpenGrepRulesResponse, OpenGrepScanResult, SubmitOpenGrepResultsError,
         SubmitOpenGrepResultsSuccess,
@@ -173,14 +173,27 @@ impl OpenGrepClient {
         );
         let mut findings = Vec::new();
         for distribution in &job.distributions {
+            let distribution_started_at = Instant::now();
             let download_url: Url = distribution.parse()?;
             let inspector_url = create_inspector_url(&job.name, &job.version, &download_url);
-            let directory = download_distribution(&self.download_client, download_url)?;
+            let directory = download_distribution_with_timeout(
+                &self.download_client,
+                download_url,
+                Some(SCAN_DEADLINE),
+            )?;
+            let remaining = SCAN_DEADLINE
+                .checked_sub(distribution_started_at.elapsed())
+                .ok_or_else(|| {
+                    color_eyre::eyre::eyre!(
+                        "distribution download and extraction exceeded the 60-second deadline"
+                    )
+                })?;
             let mut distribution_findings = run_opengrep(
                 &self.binary,
                 self.rules_directory.path(),
                 directory.path(),
                 &inspector_url,
+                remaining,
             )?;
             findings.append(&mut distribution_findings);
             ensure!(
@@ -245,6 +258,7 @@ fn run_opengrep(
     rules_directory: &Path,
     target_directory: &Path,
     inspector_base: &Url,
+    deadline: Duration,
 ) -> Result<Vec<OpenGrepFinding>> {
     let mut stdout_file = tempfile()?;
     let mut stderr_file = tempfile()?;
@@ -281,10 +295,17 @@ fn run_opengrep(
         if let Some(status) = child.try_wait()? {
             break status;
         }
-        if started_at.elapsed() >= SCAN_DEADLINE {
+        let output_too_large = stdout_file.metadata()?.len() > MAX_OPENGREP_OUTPUT_BYTES
+            || stderr_file.metadata()?.len() > MAX_OPENGREP_OUTPUT_BYTES;
+        if output_too_large {
             child.kill()?;
             child.wait()?;
-            bail!("OpenGrep exceeded the 60-second distribution deadline");
+            bail!("OpenGrep output exceeded {MAX_OPENGREP_OUTPUT_BYTES} bytes");
+        }
+        if started_at.elapsed() >= deadline {
+            child.kill()?;
+            child.wait()?;
+            bail!("OpenGrep exceeded the remaining distribution deadline");
         }
         thread::sleep(CHILD_POLL_INTERVAL);
     };
@@ -379,10 +400,16 @@ fn truncate(value: &str, limit: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{materialize_rules, run_opengrep, safe_relative_path, validate_staging_origin};
+    use super::{
+        materialize_rules, run_opengrep, safe_relative_path, validate_staging_origin, SCAN_DEADLINE,
+    };
     use crate::client::OpenGrepRulesResponse;
     use reqwest::Url;
-    use std::{collections::HashMap, path::Path, path::PathBuf};
+    use std::{
+        collections::HashMap,
+        path::{Path, PathBuf},
+        time::Duration,
+    };
     use tempfile::tempdir;
 
     #[test]
@@ -457,11 +484,48 @@ rules:
         std::fs::write(target.path().join("sample.py"), "exec('safe fixture')\n").unwrap();
         let inspector = Url::parse("https://inspector.example/packages/sample/").unwrap();
 
-        let findings = run_opengrep(&binary, rules.path(), target.path(), &inspector).unwrap();
+        let findings = run_opengrep(
+            &binary,
+            rules.path(),
+            target.path(),
+            &inspector,
+            SCAN_DEADLINE,
+        )
+        .unwrap();
 
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].rule_id, "python-test-exec");
         assert_eq!(findings[0].path, "sample.py");
         assert_eq!(findings[0].execution_context, "import_time");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn opengrep_is_killed_while_its_output_exceeds_the_limit() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let rules = tempdir().unwrap();
+        let target = tempdir().unwrap();
+        let binary = target.path().join("oversized-opengrep");
+        std::fs::write(
+            &binary,
+            "#!/bin/sh\ndd if=/dev/zero bs=1048576 count=5 2>/dev/null\nsleep 5\n",
+        )
+        .unwrap();
+        let mut permissions = std::fs::metadata(&binary).unwrap().permissions();
+        permissions.set_mode(0o700);
+        std::fs::set_permissions(&binary, permissions).unwrap();
+        let inspector = Url::parse("https://inspector.example/packages/sample/").unwrap();
+
+        let error = run_opengrep(
+            &binary,
+            rules.path(),
+            target.path(),
+            &inspector,
+            Duration::from_secs(2),
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("output exceeded"));
     }
 }

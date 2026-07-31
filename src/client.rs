@@ -20,6 +20,7 @@ use reqwest::{
 use std::{
     fs::File,
     io::{self, Read, Seek},
+    time::Duration,
 };
 
 #[derive(Clone, Copy)]
@@ -312,8 +313,26 @@ fn extract_zipfile(mut file: File, limits: ArchiveLimits) -> Result<TempDir> {
 /// Returns an error for network failures, unsupported archives, unsafe paths,
 /// or any configured resource-limit violation.
 pub fn download_distribution(http_client: &Client, download_url: Url) -> Result<TempDir> {
+    download_distribution_with_timeout(http_client, download_url, None)
+}
+
+/// Download and safely extract one distribution with a total request timeout.
+///
+/// # Errors
+///
+/// Returns an error for network failures, timeouts, unsupported archives,
+/// unsafe paths, or any configured resource-limit violation.
+pub fn download_distribution_with_timeout(
+    http_client: &Client,
+    download_url: Url,
+    timeout: Option<Duration>,
+) -> Result<TempDir> {
     let is_tarball = download_url.as_str().ends_with(".tar.gz");
-    let response = http_client.get(download_url).send()?.error_for_status()?;
+    let mut request = http_client.get(download_url);
+    if let Some(timeout) = timeout {
+        request = request.timeout(timeout);
+    }
+    let response = request.send()?.error_for_status()?;
     let limits = ArchiveLimits::configured();
     let file = stage_download(response, limits.download_size)?;
 
@@ -327,15 +346,17 @@ pub fn download_distribution(http_client: &Client, download_url: Url) -> Result<
 #[cfg(test)]
 mod tests {
     use super::{
-        build_api_http_client, build_download_http_client, extract_tarball, extract_zipfile,
-        stage_download, ArchiveLimits, RulesState, Worker,
+        build_api_http_client, build_download_http_client, download_distribution_with_timeout,
+        extract_tarball, extract_zipfile, stage_download, ArchiveLimits, RulesState, Worker,
     };
     use flate2::{write::GzEncoder, Compression};
+    use reqwest::Url;
     use std::{
         io::{Cursor, Read, Write},
         net::TcpListener,
         sync::mpsc,
         thread,
+        time::Duration,
     };
     use yara::Compiler;
     use zip::{write::SimpleFileOptions, ZipWriter};
@@ -457,6 +478,29 @@ mod tests {
         let source_request = source_request.recv().unwrap().to_ascii_lowercase();
         assert!(source_request.contains("\r\ncf-access-client-id:"));
         assert!(source_request.contains("\r\ncf-access-client-secret:"));
+    }
+
+    #[test]
+    fn distribution_download_timeout_bounds_a_stalled_response() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 1024];
+            let _ = stream.read(&mut request).unwrap();
+            thread::sleep(Duration::from_millis(250));
+        });
+        let url = Url::parse(&format!("http://{address}/example.tar.gz")).unwrap();
+
+        let error = download_distribution_with_timeout(
+            &build_download_http_client().unwrap(),
+            url,
+            Some(Duration::from_millis(20)),
+        )
+        .unwrap_err();
+
+        let request_error = error.downcast_ref::<reqwest::Error>().unwrap();
+        assert!(request_error.is_timeout());
     }
 
     #[test]
