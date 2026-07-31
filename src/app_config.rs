@@ -45,6 +45,11 @@ impl Default for AppConfig {
 }
 
 impl AppConfig {
+    /// Load configuration defaults, TOML files, and environment overrides.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when configured values cannot be deserialized.
     #[allow(clippy::result_large_err)]
     pub fn build() -> Result<AppConfig, figment::Error> {
         Figment::from(Serialized::defaults(AppConfig::default()))
