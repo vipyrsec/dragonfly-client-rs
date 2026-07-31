@@ -1,23 +1,16 @@
-mod app_config;
-mod client;
-mod exts;
-mod scanner;
-mod utils;
-
 use std::time::{Duration, Instant};
 
-use client::DragonflyClient;
 use color_eyre::eyre::{ensure, Result};
-use tracing::{error, info, span, warn, Level};
-use tracing_subscriber::EnvFilter;
-
-use crate::{
+use dragonfly_client_rs::client::Worker;
+use dragonfly_client_rs::{
     app_config::APP_CONFIG,
     client::{Job, ScanResult, SubmitJobResultsError},
     scanner::{scan_all_distributions, PackageScanResults},
 };
+use tracing::{error, info, span, warn, Level};
+use tracing_subscriber::EnvFilter;
 
-fn scan_package(client: &DragonflyClient, job: &Job) -> Option<ScanResult> {
+fn scan_package(client: &Worker, job: &Job) -> Option<ScanResult> {
     if job.hash != client.rules_state.hash {
         warn!(
             event = "scan_deferred",
@@ -63,7 +56,7 @@ fn scan_package(client: &DragonflyClient, job: &Job) -> Option<ScanResult> {
     Some(result)
 }
 
-fn run_job(client: &DragonflyClient, job: &Job) {
+fn run_job(client: &Worker, job: &Job) {
     let span = span!(
         Level::INFO,
         "scan_job",
@@ -122,7 +115,7 @@ fn run_job(client: &DragonflyClient, job: &Job) {
     }
 }
 
-fn run_jobs(client: &DragonflyClient, jobs: Vec<Job>, worker_count: usize) {
+fn run_jobs(client: &Worker, jobs: Vec<Job>, worker_count: usize) {
     if worker_count == 1 {
         for job in jobs {
             run_job(client, &job);
@@ -146,7 +139,7 @@ fn main() -> Result<()> {
     let env_filter = EnvFilter::try_from_default_env().unwrap_or(default_env_filter);
 
     tracing_subscriber::fmt().with_env_filter(env_filter).init();
-    let mut client = DragonflyClient::new()?;
+    let mut client = Worker::new()?;
     ensure!(
         APP_CONFIG.threads > 0,
         "DRAGONFLY_THREADS must be greater than zero"

@@ -20,6 +20,7 @@ use reqwest::{
 use std::{
     fs::File,
     io::{self, Read, Seek},
+    time::Duration,
 };
 
 #[derive(Clone, Copy)]
@@ -46,15 +47,19 @@ pub struct RulesState {
     pub hash: String,
 }
 
-#[warn(clippy::module_name_repetitions)]
-pub struct DragonflyClient {
+pub struct Worker {
     api_client: Client,
     download_client: Client,
     pub rules_state: RulesState,
     base_url: String,
 }
 
-impl DragonflyClient {
+impl Worker {
+    /// Build a canonical YARA worker and load its initial corpus.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when HTTP clients, rules retrieval, or compilation fail.
     pub fn new() -> Result<Self> {
         let api_client = build_api_http_client(
             &APP_CONFIG.cf_access_client_id,
@@ -78,6 +83,10 @@ impl DragonflyClient {
     }
 
     /// Update the global ruleset. Waits for a write lock.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when rules retrieval or compilation fails.
     pub fn update_rules(&mut self) -> Result<()> {
         let response = fetch_rules(&self.api_client, &self.base_url)?;
         self.rules_state.rules = response.compile()?;
@@ -86,22 +95,37 @@ impl DragonflyClient {
         Ok(())
     }
 
+    /// Lease up to `n_jobs` canonical YARA jobs.
+    ///
+    /// # Errors
+    ///
+    /// Returns an HTTP or response-deserialization error.
     pub fn bulk_get_job(&self, n_jobs: usize) -> reqwest::Result<Vec<Job>> {
         fetch_bulk_job(&self.api_client, &self.base_url, n_jobs)
     }
 
     /// Send a [`crate::client::models::ScanResult`] to mainframe
+    ///
+    /// # Errors
+    ///
+    /// Returns an HTTP or serialization error.
     pub fn send_result(&self, body: models::ScanResult) -> reqwest::Result<()> {
         send_result(&self.api_client, &self.base_url, body)
     }
 
     /// Return the client used for uncredentialed distribution downloads.
-    pub(crate) fn download_client(&self) -> &Client {
+    #[must_use]
+    pub fn download_client(&self) -> &Client {
         &self.download_client
     }
 }
 
-fn build_api_http_client(client_id: &str, client_secret: &str) -> Result<Client> {
+/// Build the credentialed Mainframe HTTP client.
+///
+/// # Errors
+///
+/// Returns an error for invalid headers or HTTP client configuration.
+pub fn build_api_http_client(client_id: &str, client_secret: &str) -> Result<Client> {
     let mut headers = HeaderMap::new();
     headers.insert("CF-Access-Client-Id", HeaderValue::from_str(client_id)?);
 
@@ -118,7 +142,12 @@ fn build_api_http_client(client_id: &str, client_secret: &str) -> Result<Client>
         .build()?)
 }
 
-fn build_download_http_client() -> reqwest::Result<Client> {
+/// Build the uncredentialed artifact-download HTTP client.
+///
+/// # Errors
+///
+/// Returns an HTTP client configuration error.
+pub fn build_download_http_client() -> reqwest::Result<Client> {
     Client::builder().gzip(true).build()
 }
 
@@ -277,9 +306,33 @@ fn extract_zipfile(mut file: File, limits: ArchiveLimits) -> Result<TempDir> {
     Ok(tmpdir)
 }
 
+/// Download and safely extract one supported distribution archive.
+///
+/// # Errors
+///
+/// Returns an error for network failures, unsupported archives, unsafe paths,
+/// or any configured resource-limit violation.
 pub fn download_distribution(http_client: &Client, download_url: Url) -> Result<TempDir> {
+    download_distribution_with_timeout(http_client, download_url, None)
+}
+
+/// Download and safely extract one distribution with a total request timeout.
+///
+/// # Errors
+///
+/// Returns an error for network failures, timeouts, unsupported archives,
+/// unsafe paths, or any configured resource-limit violation.
+pub fn download_distribution_with_timeout(
+    http_client: &Client,
+    download_url: Url,
+    timeout: Option<Duration>,
+) -> Result<TempDir> {
     let is_tarball = download_url.as_str().ends_with(".tar.gz");
-    let response = http_client.get(download_url).send()?.error_for_status()?;
+    let mut request = http_client.get(download_url);
+    if let Some(timeout) = timeout {
+        request = request.timeout(timeout);
+    }
+    let response = request.send()?.error_for_status()?;
     let limits = ArchiveLimits::configured();
     let file = stage_download(response, limits.download_size)?;
 
@@ -293,15 +346,17 @@ pub fn download_distribution(http_client: &Client, download_url: Url) -> Result<
 #[cfg(test)]
 mod tests {
     use super::{
-        build_api_http_client, build_download_http_client, extract_tarball, extract_zipfile,
-        stage_download, ArchiveLimits, DragonflyClient, RulesState,
+        build_api_http_client, build_download_http_client, download_distribution_with_timeout,
+        extract_tarball, extract_zipfile, stage_download, ArchiveLimits, RulesState, Worker,
     };
     use flate2::{write::GzEncoder, Compression};
+    use reqwest::Url;
     use std::{
         io::{Cursor, Read, Write},
         net::TcpListener,
         sync::mpsc,
         thread,
+        time::Duration,
     };
     use yara::Compiler;
     use zip::{write::SimpleFileOptions, ZipWriter};
@@ -378,7 +433,7 @@ mod tests {
             .unwrap()
             .compile_rules()
             .unwrap();
-        let client = DragonflyClient {
+        let client = Worker {
             api_client: build_api_http_client(CLIENT_ID, CLIENT_SECRET).unwrap(),
             download_client: build_download_http_client().unwrap(),
             rules_state: RulesState {
@@ -423,6 +478,29 @@ mod tests {
         let source_request = source_request.recv().unwrap().to_ascii_lowercase();
         assert!(source_request.contains("\r\ncf-access-client-id:"));
         assert!(source_request.contains("\r\ncf-access-client-secret:"));
+    }
+
+    #[test]
+    fn distribution_download_timeout_bounds_a_stalled_response() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 1024];
+            let _ = stream.read(&mut request).unwrap();
+            thread::sleep(Duration::from_millis(250));
+        });
+        let url = Url::parse(&format!("http://{address}/example.tar.gz")).unwrap();
+
+        let error = download_distribution_with_timeout(
+            &build_download_http_client().unwrap(),
+            url,
+            Some(Duration::from_millis(20)),
+        )
+        .unwrap_err();
+
+        let request_error = error.downcast_ref::<reqwest::Error>().unwrap();
+        assert!(request_error.is_timeout());
     }
 
     #[test]

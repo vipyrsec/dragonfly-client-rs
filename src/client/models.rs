@@ -75,8 +75,60 @@ pub struct RulesResponse {
     pub rules: HashMap<String, String>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct OpenGrepRulesResponse {
+    pub hash: String,
+    pub rules: HashMap<String, String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
+pub struct OpenGrepFinding {
+    pub rule_id: String,
+    pub path: String,
+    pub start_line: u64,
+    pub end_line: u64,
+    pub message: String,
+    pub severity: String,
+    pub evidence: String,
+    pub confidence: String,
+    pub execution_context: String,
+    pub inspector_url: String,
+}
+
+#[derive(Debug, Serialize, PartialEq)]
+pub struct SubmitOpenGrepResultsSuccess {
+    pub name: String,
+    pub version: String,
+    pub attempt: u64,
+    pub assignment_id: String,
+    pub commit: String,
+    pub duration_ms: u64,
+    pub findings: Vec<OpenGrepFinding>,
+}
+
+#[derive(Debug, Serialize, PartialEq)]
+pub struct SubmitOpenGrepResultsError {
+    pub name: String,
+    pub version: String,
+    pub attempt: u64,
+    pub assignment_id: String,
+    pub duration_ms: u64,
+    pub reason: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+pub enum OpenGrepScanResult {
+    Success(SubmitOpenGrepResultsSuccess),
+    Error(SubmitOpenGrepResultsError),
+}
+
 impl RulesResponse {
     /// Compile the rules from the response
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the YARA corpus cannot be parsed or compiled.
     pub fn compile(&self) -> Result<Rules> {
         let rules_str = self
             .rules
