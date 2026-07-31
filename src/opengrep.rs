@@ -15,6 +15,7 @@ use reqwest::{blocking::Client, Url};
 use serde::Deserialize;
 use serde_json::Value;
 use tempfile::{tempdir, tempfile, TempDir};
+use tracing::warn;
 
 use crate::{
     app_config::APP_CONFIG,
@@ -270,7 +271,6 @@ fn run_opengrep(
                 .to_str()
                 .ok_or_else(|| color_eyre::eyre::eyre!("rule path is not UTF-8"))?,
             "--json",
-            "--strict",
             "--no-git-ignore",
             "--jobs",
             "1",
@@ -319,11 +319,22 @@ fn run_opengrep(
     let stdout = read_bounded(&mut stdout_file)?;
     let document: OpenGrepDocument =
         serde_json::from_str(&stdout).wrap_err("OpenGrep returned invalid JSON")?;
+    let unexpected_errors: Vec<&Value> = document
+        .errors
+        .iter()
+        .filter(|error| !is_partial_parse_warning(error))
+        .collect();
     ensure!(
-        document.errors.is_empty(),
+        unexpected_errors.is_empty(),
         "OpenGrep reported scan errors: {}",
-        serde_json::to_string(&document.errors)?
+        serde_json::to_string(&unexpected_errors)?
     );
+    if !document.errors.is_empty() {
+        warn!(
+            partial_parse_errors = document.errors.len(),
+            "OpenGrep partially parsed target files; preserving valid findings"
+        );
+    }
     ensure!(
         document.skipped_rules.is_empty(),
         "OpenGrep skipped rules: {}",
@@ -335,6 +346,16 @@ fn run_opengrep(
         .into_iter()
         .map(|finding| normalize_finding(finding, target_directory, inspector_base))
         .collect()
+}
+
+fn is_partial_parse_warning(error: &Value) -> bool {
+    error.get("level").and_then(Value::as_str) == Some("warn")
+        && error
+            .get("type")
+            .and_then(Value::as_array)
+            .and_then(|kind| kind.first())
+            .and_then(Value::as_str)
+            == Some("PartialParsing")
 }
 
 fn read_bounded(file: &mut File) -> Result<String> {
@@ -497,6 +518,109 @@ rules:
         assert_eq!(findings[0].rule_id, "python-test-exec");
         assert_eq!(findings[0].path, "sample.py");
         assert_eq!(findings[0].execution_context, "import_time");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn partial_parse_warnings_preserve_valid_findings() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let rules = tempdir().unwrap();
+        let target = tempdir().unwrap();
+        let binary = target.path().join("partial-opengrep");
+        std::fs::write(
+            &binary,
+            r#"#!/bin/sh
+for argument in "$@"; do
+  if [ "$argument" = "--strict" ]; then
+    exit 2
+  fi
+done
+printf '%s' '{
+  "results": [{
+    "check_id": "python-test-exec",
+    "path": "sample.py",
+    "start": {"line": 1},
+    "end": {"line": 1},
+    "extra": {
+      "message": "Dynamic execution.",
+      "severity": "ERROR",
+      "metadata": {
+        "evidence": "composition",
+        "confidence": "high",
+        "execution_context": "import_time"
+      }
+    }
+  }],
+  "errors": [{
+    "code": 3,
+    "level": "warn",
+    "message": "Syntax error",
+    "path": "other.py",
+    "type": ["PartialParsing", []]
+  }],
+  "skipped_rules": []
+}'
+"#,
+        )
+        .unwrap();
+        let mut permissions = std::fs::metadata(&binary).unwrap().permissions();
+        permissions.set_mode(0o700);
+        std::fs::set_permissions(&binary, permissions).unwrap();
+        let inspector = Url::parse("https://inspector.example/packages/sample/").unwrap();
+
+        let findings = run_opengrep(
+            &binary,
+            rules.path(),
+            target.path(),
+            &inspector,
+            SCAN_DEADLINE,
+        )
+        .unwrap();
+
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].rule_id, "python-test-exec");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn non_parse_scan_errors_remain_fatal() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let rules = tempdir().unwrap();
+        let target = tempdir().unwrap();
+        let binary = target.path().join("errored-opengrep");
+        std::fs::write(
+            &binary,
+            r#"#!/bin/sh
+printf '%s' '{
+  "results": [],
+  "errors": [{
+    "code": 2,
+    "level": "warn",
+    "message": "Rule timed out",
+    "type": "Timeout"
+  }],
+  "skipped_rules": []
+}'
+"#,
+        )
+        .unwrap();
+        let mut permissions = std::fs::metadata(&binary).unwrap().permissions();
+        permissions.set_mode(0o700);
+        std::fs::set_permissions(&binary, permissions).unwrap();
+        let inspector = Url::parse("https://inspector.example/packages/sample/").unwrap();
+
+        let error = run_opengrep(
+            &binary,
+            rules.path(),
+            target.path(),
+            &inspector,
+            SCAN_DEADLINE,
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("reported scan errors"));
     }
 
     #[cfg(unix)]
