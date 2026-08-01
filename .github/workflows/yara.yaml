@@ -8,11 +8,6 @@ on:
         description: Runner image
         required: true
         type: string
-      version:
-        description: YARA version
-        default: 4.5.4
-        required: false
-        type: string
     outputs:
       artifacts:
         description: YARA Artifacts
@@ -29,7 +24,9 @@ defaults:
     shell: bash
 
 env:
-  YARA_VERSION: ${{ inputs.version }}
+  YARA_COMMIT: 7ff39042be5c63682a037e13a75221d59393cf8b
+  YARA_SHA256: 70e9d13905f5687a2c2731b64a8073001d5f1909967f81937ab27fe10006ec97
+  YARA_VERSION: 4.5.4
 
 permissions:
   contents: read
@@ -43,19 +40,21 @@ jobs:
         id: cache-yara
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
-          key: ${{ github.ref }}-yara-${{ inputs.version }}-${{ runner.os }}-${{ runner.arch }}
-          path: yara-${{ inputs.version }}
+          key: yara-${{ env.YARA_COMMIT }}-${{ runner.os }}-${{ runner.arch }}
+          path: yara-${{ env.YARA_COMMIT }}
 
       - name: Compile YARA
         run: |
-          #/usr/bin/env bash
-          set -e
+          set -euo pipefail
 
-          curl -sL \
-              https://github.com/VirusTotal/yara/archive/refs/tags/v$YARA_VERSION.tar.gz \
-              -o yara-$YARA_VERSION.tar.gz
-          tar -xzf yara-$YARA_VERSION.tar.gz
-          cd yara-$YARA_VERSION
+          archive_filename="yara-$YARA_COMMIT.tar.gz"
+          curl --fail --location --silent --show-error \
+            "https://github.com/VirusTotal/yara/archive/$YARA_COMMIT.tar.gz" \
+            --output "$archive_filename"
+          printf '%s  %s\n' "$YARA_SHA256" "$archive_filename" \
+            | sha256sum --check --strict
+          tar -xzf "$archive_filename"
+          cd "yara-$YARA_COMMIT"
           ./bootstrap.sh
           ./configure
           make
@@ -65,14 +64,14 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           if-no-files-found: error
-          name: yara-${{ inputs.version }}-${{ runner.os }}-${{ runner.arch }}
+          name: yara-${{ env.YARA_VERSION }}-${{ runner.os }}-${{ runner.arch }}
           path: |
-            yara-${{ inputs.version }}/libyara/include/yara
-            yara-${{ inputs.version }}/libyara/include/yara.h
-            yara-${{ inputs.version }}/.libs/libyara*
+            yara-${{ env.YARA_COMMIT }}/libyara/include/yara
+            yara-${{ env.YARA_COMMIT }}/libyara/include/yara.h
+            yara-${{ env.YARA_COMMIT }}/.libs/libyara*
           include-hidden-files: true
           retention-days: 1
           overwrite: true
 
     outputs:
-      artifacts: yara-${{ inputs.version }}-${{ runner.os }}-${{ runner.arch }}
+      artifacts: yara-${{ env.YARA_VERSION }}-${{ runner.os }}-${{ runner.arch }}

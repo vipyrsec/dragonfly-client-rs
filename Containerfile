@@ -15,34 +15,18 @@ ARG RUST_VERSION=1.91
 ARG RUSTFLAGS="-L/usr/local/lib"
 # YARA_VERSION The version of YARA against which to link the project
 ARG YARA_VERSION=4.5.4
-# OPENGREP_VERSION The reviewed OpenGrep release used only by the shadow target
-ARG OPENGREP_VERSION=1.26.0
-# OPENGREP_SHA256 The verified linux-amd64 release digest
-ARG OPENGREP_SHA256=40c21299eeddabf743b856daa843d24f9d4a027130671cd45b3b21776fd9ab26
+# YARA_COMMIT The immutable upstream commit corresponding to YARA_VERSION
+ARG YARA_COMMIT=7ff39042be5c63682a037e13a75221d59393cf8b
+# YARA_SHA256 The verified digest of the immutable upstream source archive
+ARG YARA_SHA256=70e9d13905f5687a2c2731b64a8073001d5f1909967f81937ab27fe10006ec97
 
-# opengrep-binary is reachable only from the staging shadow image target.
-FROM rust:$RUST_VERSION-$DEBIAN_VERSION AS opengrep-binary
-ARG OPENGREP_SHA256
-ARG OPENGREP_VERSION
-SHELL ["/bin/bash", "-o", "pipefail", "-c"]
-
-RUN <<EOT
-#!/usr/bin/env bash
-set -euo pipefail
-
-curl --fail --location --silent --show-error \
-  "https://github.com/opengrep/opengrep/releases/download/v${OPENGREP_VERSION}/opengrep_manylinux_x86" \
-  --output /opengrep
-printf '%s  /opengrep\n' "${OPENGREP_SHA256}" > /tmp/opengrep.sha256
-sha256sum --check --strict /tmp/opengrep.sha256
-chmod 0755 /opengrep
-EOT
-
-# build-base The base for standard and shadow Rust builds, including YARA.
+# build-base contains the reviewed native YARA build used by later stages.
 FROM rust:$RUST_VERSION-$DEBIAN_VERSION AS build-base
 ARG PROJECT
 
 ARG RUSTFLAGS
+ARG YARA_COMMIT
+ARG YARA_SHA256
 ARG YARA_VERSION
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
@@ -63,12 +47,15 @@ RUN <<EOT
 #!/usr/bin/env bash
 set -euo pipefail
 
-archive_filename="yara-$YARA_VERSION.tar.gz"
-curl -sL "https://github.com/VirusTotal/yara/archive/refs/tags/v$YARA_VERSION.tar.gz" -o "$archive_filename"
+archive_filename="yara-$YARA_COMMIT.tar.gz"
+curl --fail --location --silent --show-error \
+  "https://github.com/VirusTotal/yara/archive/$YARA_COMMIT.tar.gz" \
+  --output "$archive_filename"
+printf '%s  %s\n' "$YARA_SHA256" "$archive_filename" | sha256sum --check --strict
 tar -xzf "$archive_filename"
 EOT
 
-WORKDIR /build/yara-$YARA_VERSION
+WORKDIR /build/yara-$YARA_COMMIT
 
 RUN ./bootstrap.sh && ./configure && make && make install
 
@@ -128,8 +115,7 @@ EOT
 COPY src src
 RUN --mount=type=cache,id=cargo-registry,target=/usr/local/cargo/registry \
   --mount=type=cache,id=rust-target-release,target=/app/target \
-  cargo build --locked --release --bin "$PROJECT" \
-  && cp "/app/target/release/$PROJECT" "/app/$PROJECT"
+  cargo build --locked --release && cp "/app/target/release/$PROJECT" "/app/$PROJECT"
 
 # release The release build
 FROM gcr.io/distroless/cc-debian$DEBIAN_VERSION_NUMBER:nonroot AS release
@@ -140,22 +126,3 @@ WORKDIR /app
 COPY --from=build-release "/app/$PROJECT" "./$PROJECT"
 
 ENTRYPOINT ["./dragonfly-client-rs"]
-
-# build-opengrep-release is reachable only from the staging shadow image.
-FROM build-release AS build-opengrep-release
-
-RUN --mount=type=cache,id=cargo-registry,target=/usr/local/cargo/registry \
-  --mount=type=cache,id=rust-target-release,target=/app/target \
-  cargo build --locked --release --bin opengrep-shadow \
-  && cp /app/target/release/opengrep-shadow /app/opengrep-shadow
-
-# opengrep-release The staging-only shadow worker. The standard release image
-# above intentionally does not contain the OpenGrep executable.
-FROM gcr.io/distroless/cc-debian$DEBIAN_VERSION_NUMBER:nonroot AS opengrep-release
-
-WORKDIR /app
-
-COPY --from=build-opengrep-release /app/opengrep-shadow ./opengrep-shadow
-COPY --from=opengrep-binary /opengrep /usr/local/bin/opengrep
-
-ENTRYPOINT ["./opengrep-shadow"]

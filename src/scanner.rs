@@ -144,7 +144,6 @@ impl DistributionScanResults {
     ///
     /// This file with the greatest score is considered the most malicious. If multiple
     /// files have the same score, an arbitrary file is picked.
-    #[must_use]
     pub fn get_most_malicious_file(&self) -> Option<&FileScanResult> {
         self.most_malicious_file.as_ref()
     }
@@ -156,7 +155,6 @@ impl DistributionScanResults {
     }
 
     /// Calculate the distribution score, counting each matched rule once.
-    #[must_use]
     pub fn get_total_score(&self) -> i64 {
         self.matched_rules.iter().map(|rule| rule.score).sum()
     }
@@ -172,7 +170,6 @@ impl DistributionScanResults {
 
     /// Return the inspector URL of the most malicious file, or `None` if there is no most malicious
     /// file
-    #[must_use]
     pub fn inspector_url(&self) -> Option<String> {
         self.get_most_malicious_file().map(|file| {
             format!(
@@ -194,7 +191,6 @@ pub struct PackageScanResults {
 }
 
 impl PackageScanResults {
-    #[must_use]
     pub fn new(
         name: String,
         version: String,
@@ -253,11 +249,6 @@ impl PackageScanResults {
 /// Scan all the distributions of the given job against the given ruleset
 ///
 /// Uses the provided HTTP client to download each distribution.
-///
-/// # Errors
-///
-/// Returns an error for malformed URLs, download or archive failures, YARA
-/// failures, or any configured resource-limit violation.
 pub fn scan_all_distributions(
     http_client: &Client,
     rules: &Rules,
@@ -439,6 +430,28 @@ mod tests {
             .unwrap_err();
 
         assert!(error.to_string().contains("distribution limit"));
+    }
+
+    #[test]
+    fn malformed_distribution_urls_return_an_error() {
+        let rules = Compiler::new()
+            .unwrap()
+            .add_rules_str("rule never { condition: false }")
+            .unwrap()
+            .compile_rules()
+            .unwrap();
+        let job = Job {
+            hash: String::new(),
+            name: "malformed-distribution".into(),
+            version: "1.0.0".into(),
+            distributions: vec!["not a URL".into()],
+            attempt: 1,
+            assignment_id: "e6e7d9ea-8ba5-4597-b4b8-a2b07090ad2c".into(),
+        };
+
+        let result = super::scan_all_distributions(&reqwest::blocking::Client::new(), &rules, &job);
+
+        assert!(result.is_err());
     }
 
     #[test]
