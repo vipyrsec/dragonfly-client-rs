@@ -286,12 +286,12 @@ impl OpenGrepClient {
             let reused_findings = synthesize_reused_findings(&target_plan, &inspector_url)?;
             let Some(remaining) = SCAN_DEADLINE.checked_sub(distribution_started_at.elapsed())
             else {
-                findings.extend(reused_findings);
+                append_findings(&mut findings, reused_findings)?;
                 warnings.push(format!("Timed out preparing distribution {distribution}"));
                 break;
             };
             if target_plan.retained.is_empty() {
-                findings.extend(reused_findings);
+                append_findings(&mut findings, reused_findings)?;
                 continue;
             }
             let distribution_run = match run_opengrep(
@@ -303,13 +303,13 @@ impl OpenGrepClient {
             ) {
                 Ok(run) => run,
                 Err(error) if is_timeout_error(&error) => {
-                    findings.extend(reused_findings);
+                    append_findings(&mut findings, reused_findings)?;
                     warnings.push(format!("Timed out scanning distribution {distribution}"));
                     break;
                 }
                 Err(error) => return Err(error),
             };
-            let mut alias_findings = synthesize_local_alias_findings(
+            let alias_findings = synthesize_local_alias_findings(
                 &target_plan,
                 &distribution_run.findings,
                 &inspector_url,
@@ -321,14 +321,10 @@ impl OpenGrepClient {
                     &mut package_cache,
                 );
             }
-            findings.extend(distribution_run.findings);
-            findings.extend(reused_findings);
-            findings.append(&mut alias_findings);
+            append_findings(&mut findings, distribution_run.findings)?;
+            append_findings(&mut findings, reused_findings)?;
+            append_findings(&mut findings, alias_findings)?;
             warnings.extend(distribution_run.warnings);
-            ensure!(
-                findings.len() <= MAX_FINDINGS,
-                "OpenGrep produced more than {MAX_FINDINGS} findings"
-            );
         }
         let partial_reason = (!warnings.is_empty()).then(|| truncate(&warnings.join("; "), 2048));
         Ok(ScanJobOutcome {
@@ -336,6 +332,18 @@ impl OpenGrepClient {
             partial_reason,
         })
     }
+}
+
+fn append_findings(
+    findings: &mut Vec<OpenGrepFinding>,
+    additional: Vec<OpenGrepFinding>,
+) -> Result<()> {
+    ensure!(
+        findings.len().saturating_add(additional.len()) <= MAX_FINDINGS,
+        "OpenGrep produced more than {MAX_FINDINGS} findings"
+    );
+    findings.extend(additional);
+    Ok(())
 }
 
 /// Require the exact staging API origin without paths, credentials, or queries.
@@ -778,10 +786,10 @@ fn truncate(value: &str, limit: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        cache_completed_file_results, is_timeout_error, materialize_rules, prepare_target,
-        rules_allow_content_reuse, run_opengrep, safe_relative_path,
+        append_findings, cache_completed_file_results, is_timeout_error, materialize_rules,
+        prepare_target, rules_allow_content_reuse, run_opengrep, safe_relative_path,
         synthesize_local_alias_findings, synthesize_reused_findings, validate_staging_origin,
-        PackageScanCache, SCAN_DEADLINE,
+        PackageScanCache, MAX_FINDINGS, SCAN_DEADLINE,
     };
     use crate::client::{OpenGrepFinding, OpenGrepRulesResponse};
     use reqwest::Url;
@@ -1097,6 +1105,10 @@ printf '%s' '{
             reused[0].inspector_url,
             "https://inspector.example/second/other.py"
         );
+
+        let mut bounded = vec![reused[0].clone(); MAX_FINDINGS];
+        assert!(append_findings(&mut bounded, reused).is_err());
+        assert_eq!(bounded.len(), MAX_FINDINGS);
     }
 
     #[test]
