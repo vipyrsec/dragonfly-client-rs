@@ -8,21 +8,6 @@ on:
         description: Runner image
         required: true
         type: string
-      version:
-        description: YARA version
-        default: 4.5.4
-        required: false
-        type: string
-      commit:
-        description: Immutable YARA source commit
-        default: 7ff39042be5c63682a037e13a75221d59393cf8b
-        required: false
-        type: string
-      sha256:
-        description: SHA-256 of the immutable YARA source archive
-        default: 70e9d13905f5687a2c2731b64a8073001d5f1909967f81937ab27fe10006ec97
-        required: false
-        type: string
     outputs:
       artifacts:
         description: YARA Artifacts
@@ -39,9 +24,9 @@ defaults:
     shell: bash
 
 env:
-  YARA_COMMIT: ${{ inputs.commit }}
-  YARA_SHA256: ${{ inputs.sha256 }}
-  YARA_VERSION: ${{ inputs.version }}
+  YARA_COMMIT: 7ff39042be5c63682a037e13a75221d59393cf8b
+  YARA_SHA256: 70e9d13905f5687a2c2731b64a8073001d5f1909967f81937ab27fe10006ec97
+  YARA_VERSION: 4.5.4
 
 permissions:
   contents: read
@@ -55,8 +40,8 @@ jobs:
         id: cache-yara
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
-          key: yara-${{ inputs.commit }}-${{ runner.os }}-${{ runner.arch }}
-          path: yara-${{ inputs.commit }}
+          key: yara-${{ env.YARA_COMMIT }}-${{ runner.os }}-${{ runner.arch }}
+          path: yara-${{ env.YARA_COMMIT }}
 
       - name: Compile YARA
         run: |
@@ -79,14 +64,14 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           if-no-files-found: error
-          name: yara-${{ inputs.version }}-${{ runner.os }}-${{ runner.arch }}
+          name: yara-${{ env.YARA_VERSION }}-${{ runner.os }}-${{ runner.arch }}
           path: |
-            yara-${{ inputs.commit }}/libyara/include/yara
-            yara-${{ inputs.commit }}/libyara/include/yara.h
-            yara-${{ inputs.commit }}/.libs/libyara*
+            yara-${{ env.YARA_COMMIT }}/libyara/include/yara
+            yara-${{ env.YARA_COMMIT }}/libyara/include/yara.h
+            yara-${{ env.YARA_COMMIT }}/.libs/libyara*
           include-hidden-files: true
           retention-days: 1
           overwrite: true
 
     outputs:
-      artifacts: yara-${{ inputs.version }}-${{ runner.os }}-${{ runner.arch }}
+      artifacts: yara-${{ env.YARA_VERSION }}-${{ runner.os }}-${{ runner.arch }}
