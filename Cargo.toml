@@ -21,7 +21,7 @@ tracing-subscriber = {version = "0.3.22", features = ["env-filter"]}
 walkdir = "2.5.0"
 yara = "0.31.0"
 yara-sys = {version = "0.31.0", features = ["vendored"]}
-zip = {version = "7.0.0", default-features = false, features = ["deflate-flate2-zlib-rs"]}
+zip = {version = "8.6.0", default-features = false, features = ["deflate-flate2-zlib-rs"]}
 
 [profile.release]
 strip = true
