@@ -262,7 +262,7 @@ pub fn scan_all_distributions(
     );
     let mut distribution_scan_results = Vec::with_capacity(job.distributions.len());
     for distribution in &job.distributions {
-        let download_url: Url = distribution.parse().unwrap();
+        let download_url: Url = distribution.parse()?;
         let inspector_url = create_inspector_url(&job.name, &job.version, &download_url);
 
         let dir = download_distribution(http_client, download_url.clone())?;
@@ -430,6 +430,28 @@ mod tests {
             .unwrap_err();
 
         assert!(error.to_string().contains("distribution limit"));
+    }
+
+    #[test]
+    fn malformed_distribution_urls_return_an_error() {
+        let rules = Compiler::new()
+            .unwrap()
+            .add_rules_str("rule never { condition: false }")
+            .unwrap()
+            .compile_rules()
+            .unwrap();
+        let job = Job {
+            hash: String::new(),
+            name: "malformed-distribution".into(),
+            version: "1.0.0".into(),
+            distributions: vec!["not a URL".into()],
+            attempt: 1,
+            assignment_id: "e6e7d9ea-8ba5-4597-b4b8-a2b07090ad2c".into(),
+        };
+
+        let result = super::scan_all_distributions(&reqwest::blocking::Client::new(), &rules, &job);
+
+        assert!(result.is_err());
     }
 
     #[test]
