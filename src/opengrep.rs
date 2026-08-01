@@ -141,6 +141,7 @@ pub struct OpenGrepClient {
     base_url: String,
     binary: PathBuf,
     rules_directory: TempDir,
+    content_reuse_safe: bool,
     pub rules_hash: String,
 }
 
@@ -160,6 +161,7 @@ impl OpenGrepClient {
         let download_client = build_download_http_client()?;
         let response = fetch_opengrep_rules(&api_client, &APP_CONFIG.base_url)?;
         let rules_hash = response.hash.clone();
+        let content_reuse_safe = rules_allow_content_reuse(&response);
         let rules_directory = materialize_rules(&response)?;
         Ok(Self {
             api_client,
@@ -167,6 +169,7 @@ impl OpenGrepClient {
             base_url: APP_CONFIG.base_url.trim_end_matches('/').to_owned(),
             binary,
             rules_directory,
+            content_reuse_safe,
             rules_hash,
         })
     }
@@ -178,9 +181,11 @@ impl OpenGrepClient {
     /// Returns an error when retrieval or safe materialization fails.
     pub fn refresh_rules(&mut self) -> Result<()> {
         let response = fetch_opengrep_rules(&self.api_client, &self.base_url)?;
+        let content_reuse_safe = rules_allow_content_reuse(&response);
         let rules_directory = materialize_rules(&response)?;
         self.rules_hash = response.hash;
         self.rules_directory = rules_directory;
+        self.content_reuse_safe = content_reuse_safe;
         Ok(())
     }
 
@@ -258,7 +263,8 @@ impl OpenGrepClient {
                 }
                 Err(error) => return Err(error),
             };
-            let target_plan = prepare_target(directory.path(), &package_cache)?;
+            let target_plan =
+                prepare_target(directory.path(), &package_cache, self.content_reuse_safe)?;
             let deduplicated_files = target_plan.deduplicated_files();
             if deduplicated_files > 0 {
                 info!(
@@ -358,6 +364,16 @@ fn materialize_rules(response: &OpenGrepRulesResponse) -> Result<TempDir> {
         fs::write(destination, contents)?;
     }
     Ok(directory)
+}
+
+fn rules_allow_content_reuse(response: &OpenGrepRulesResponse) -> bool {
+    !response.rules.values().any(|contents| {
+        contents
+            .chars()
+            .filter(|character| !character.is_whitespace() && !matches!(character, '\'' | '"'))
+            .collect::<String>()
+            .contains("paths:")
+    })
 }
 
 fn safe_relative_path(value: &str) -> Result<PathBuf> {
@@ -520,7 +536,11 @@ fn is_timeout_error(error: &color_eyre::Report) -> bool {
     })
 }
 
-fn prepare_target(target_directory: &Path, cache: &PackageScanCache) -> Result<TargetPlan> {
+fn prepare_target(
+    target_directory: &Path,
+    cache: &PackageScanCache,
+    content_reuse_safe: bool,
+) -> Result<TargetPlan> {
     let mut paths = WalkDir::new(target_directory)
         .follow_links(false)
         .into_iter()
@@ -542,7 +562,11 @@ fn prepare_target(target_directory: &Path, cache: &PackageScanCache) -> Result<T
         }
         let relative_path = relative_target_path(&path, target_directory)?;
         let identity = hash_file(&path)?;
-        if let Some(cached_findings) = cache.findings_by_file.get(&identity) {
+        if let Some(cached_findings) = cache
+            .findings_by_file
+            .get(&identity)
+            .filter(|_| content_reuse_safe)
+        {
             fs::remove_file(path)?;
             reused.push(ReusedFile {
                 findings: cached_findings.clone(),
@@ -550,7 +574,10 @@ fn prepare_target(target_directory: &Path, cache: &PackageScanCache) -> Result<T
             });
             continue;
         }
-        if let Some(canonical_path) = retained_by_identity.get(&identity) {
+        if let Some(canonical_path) = retained_by_identity
+            .get(&identity)
+            .filter(|_| content_reuse_safe)
+        {
             fs::remove_file(path)?;
             local_aliases.push((relative_path, canonical_path.clone()));
             continue;
@@ -720,9 +747,9 @@ fn truncate(value: &str, limit: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        cache_completed_file_results, materialize_rules, prepare_target, run_opengrep,
-        safe_relative_path, synthesize_local_alias_findings, synthesize_reused_findings,
-        validate_staging_origin, PackageScanCache, SCAN_DEADLINE,
+        cache_completed_file_results, materialize_rules, prepare_target, rules_allow_content_reuse,
+        run_opengrep, safe_relative_path, synthesize_local_alias_findings,
+        synthesize_reused_findings, validate_staging_origin, PackageScanCache, SCAN_DEADLINE,
     };
     use crate::client::{OpenGrepFinding, OpenGrepRulesResponse};
     use reqwest::Url;
@@ -777,6 +804,35 @@ mod tests {
             std::fs::read_to_string(directory.path().join("python/payload.yml")).unwrap(),
             "rules: []"
         );
+    }
+
+    #[test]
+    fn path_scoped_rules_disable_content_reuse() {
+        let content_only = OpenGrepRulesResponse {
+            hash: "content-only".to_owned(),
+            rules: HashMap::from([(
+                "python/content.yml".to_owned(),
+                "rules:\n  - id: content-only\n    pattern: exec(...)\n".to_owned(),
+            )]),
+        };
+        let path_scoped = OpenGrepRulesResponse {
+            hash: "path-scoped".to_owned(),
+            rules: HashMap::from([(
+                "python/path.yml".to_owned(),
+                "rules:\n  - id: path-scoped\n    paths:\n      include: [src/**]\n".to_owned(),
+            )]),
+        };
+        let quoted_path_scoped = OpenGrepRulesResponse {
+            hash: "quoted-path-scoped".to_owned(),
+            rules: HashMap::from([(
+                "python/quoted-path.yml".to_owned(),
+                "rules:\n  - id: path-scoped\n    'paths' : {include: [src/**]}\n".to_owned(),
+            )]),
+        };
+
+        assert!(rules_allow_content_reuse(&content_only));
+        assert!(!rules_allow_content_reuse(&path_scoped));
+        assert!(!rules_allow_content_reuse(&quoted_path_scoped));
     }
 
     #[test]
@@ -951,7 +1007,7 @@ printf '%s' '{
         let first_inspector = Url::parse("https://inspector.example/first/").unwrap();
         let mut cache = PackageScanCache::default();
 
-        let first_plan = prepare_target(first_target.path(), &cache).unwrap();
+        let first_plan = prepare_target(first_target.path(), &cache, true).unwrap();
         assert_eq!(first_plan.deduplicated_files(), 1);
         assert!(first_target.path().join("first.py").exists());
         assert!(!nested.join("duplicate.py").exists());
@@ -983,7 +1039,7 @@ printf '%s' '{
         let second_target = tempdir().unwrap();
         std::fs::write(second_target.path().join("other.py"), "print('same')\n").unwrap();
         std::fs::write(second_target.path().join("other.txt"), "print('same')\n").unwrap();
-        let second_plan = prepare_target(second_target.path(), &cache).unwrap();
+        let second_plan = prepare_target(second_target.path(), &cache, true).unwrap();
         let second_inspector = Url::parse("https://inspector.example/second/").unwrap();
         let reused = synthesize_reused_findings(&second_plan, &second_inspector).unwrap();
 
@@ -997,6 +1053,20 @@ printf '%s' '{
             reused[0].inspector_url,
             "https://inspector.example/second/other.py"
         );
+    }
+
+    #[test]
+    fn path_scoped_corpus_preserves_duplicate_files() {
+        let target = tempdir().unwrap();
+        std::fs::write(target.path().join("first.py"), "print('same')\n").unwrap();
+        std::fs::write(target.path().join("second.py"), "print('same')\n").unwrap();
+
+        let plan = prepare_target(target.path(), &PackageScanCache::default(), false).unwrap();
+
+        assert_eq!(plan.retained.len(), 2);
+        assert_eq!(plan.deduplicated_files(), 0);
+        assert!(target.path().join("first.py").exists());
+        assert!(target.path().join("second.py").exists());
     }
 
     #[cfg(unix)]
