@@ -263,6 +263,7 @@ mod tests {
             commit: "abc123".to_owned(),
             duration_ms: 10,
             findings: vec![],
+            partial_reason: None,
         });
         send_opengrep_result(&client, &result_url, &result).unwrap();
         let request = result_request.recv().unwrap();

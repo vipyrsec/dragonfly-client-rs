@@ -22,6 +22,7 @@ fn run_job(client: &OpenGrepClient, job: &Job) {
             version = %job.version,
             elapsed_ms = started_at.elapsed().as_millis(),
             finding_count = success.findings.len(),
+            partial = success.partial_reason.is_some(),
             "Completed OpenGrep shadow scan"
         ),
         OpenGrepScanResult::Error(failure) => error!(

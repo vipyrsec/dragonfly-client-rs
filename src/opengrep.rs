@@ -1,6 +1,9 @@
 use std::{
+    collections::{hash_map::DefaultHasher, HashMap},
+    error::Error as StdError,
     fs::{self, File},
-    io::{Read, Seek, SeekFrom},
+    hash::{Hash, Hasher},
+    io::{self, Read, Seek, SeekFrom},
     path::{Component, Path, PathBuf},
     process::{Command, Stdio},
     thread,
@@ -15,7 +18,8 @@ use reqwest::{blocking::Client, Url};
 use serde::Deserialize;
 use serde_json::Value;
 use tempfile::{tempdir, tempfile, TempDir};
-use tracing::warn;
+use tracing::{info, warn};
+use walkdir::WalkDir;
 
 use crate::{
     app_config::APP_CONFIG,
@@ -69,6 +73,29 @@ struct OpenGrepDocument {
     errors: Vec<Value>,
     #[serde(default)]
     skipped_rules: Vec<Value>,
+}
+
+#[derive(Debug)]
+struct ScanTimeout(&'static str);
+
+impl std::fmt::Display for ScanTimeout {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.0)
+    }
+}
+
+impl StdError for ScanTimeout {}
+
+#[derive(Debug)]
+struct OpenGrepRun {
+    findings: Vec<OpenGrepFinding>,
+    warnings: Vec<String>,
+}
+
+#[derive(Debug)]
+struct ScanJobOutcome {
+    findings: Vec<OpenGrepFinding>,
+    partial_reason: Option<String>,
 }
 
 pub struct OpenGrepClient {
@@ -136,14 +163,15 @@ impl OpenGrepClient {
         let result = self.scan_job(job);
         let duration_ms = u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
         match result {
-            Ok(findings) => OpenGrepScanResult::Success(SubmitOpenGrepResultsSuccess {
+            Ok(outcome) => OpenGrepScanResult::Success(SubmitOpenGrepResultsSuccess {
                 name: job.name.clone(),
                 version: job.version.clone(),
                 attempt: job.attempt,
                 assignment_id: job.assignment_id.clone(),
                 commit: job.hash.clone(),
                 duration_ms,
-                findings,
+                findings: outcome.findings,
+                partial_reason: outcome.partial_reason,
             }),
             Err(error) => OpenGrepScanResult::Error(SubmitOpenGrepResultsError {
                 name: job.name.clone(),
@@ -165,7 +193,7 @@ impl OpenGrepClient {
         send_opengrep_result(&self.api_client, &self.base_url, result)
     }
 
-    fn scan_job(&self, job: &Job) -> Result<Vec<OpenGrepFinding>> {
+    fn scan_job(&self, job: &Job) -> Result<ScanJobOutcome> {
         ensure!(
             job.distributions.len() <= APP_CONFIG.max_distributions,
             "package contains {} distributions, exceeding the {}-distribution limit",
@@ -173,36 +201,67 @@ impl OpenGrepClient {
             APP_CONFIG.max_distributions
         );
         let mut findings = Vec::new();
+        let mut warnings = Vec::new();
         for distribution in &job.distributions {
             let distribution_started_at = Instant::now();
             let download_url: Url = distribution.parse()?;
             let inspector_url = create_inspector_url(&job.name, &job.version, &download_url);
-            let directory = download_distribution_with_timeout(
+            let directory = match download_distribution_with_timeout(
                 &self.download_client,
                 download_url,
                 Some(SCAN_DEADLINE),
-            )?;
-            let remaining = SCAN_DEADLINE
-                .checked_sub(distribution_started_at.elapsed())
-                .ok_or_else(|| {
-                    color_eyre::eyre::eyre!(
-                        "distribution download and extraction exceeded the 60-second deadline"
-                    )
-                })?;
-            let mut distribution_findings = run_opengrep(
+            ) {
+                Ok(directory) => directory,
+                Err(error) if is_timeout_error(&error) => {
+                    warnings.push(format!(
+                        "Timed out downloading or extracting distribution {distribution}"
+                    ));
+                    break;
+                }
+                Err(error) => return Err(error),
+            };
+            let Some(remaining) = SCAN_DEADLINE.checked_sub(distribution_started_at.elapsed())
+            else {
+                warnings.push(format!(
+                    "Timed out downloading or extracting distribution {distribution}"
+                ));
+                break;
+            };
+            let deduplicated_files = deduplicate_target_files(directory.path())?;
+            if deduplicated_files > 0 {
+                info!(
+                    package = %job.name,
+                    version = %job.version,
+                    deduplicated_files,
+                    "Removed duplicate files before OpenGrep scan"
+                );
+            }
+            let distribution_run = match run_opengrep(
                 &self.binary,
                 self.rules_directory.path(),
                 directory.path(),
                 &inspector_url,
                 remaining,
-            )?;
-            findings.append(&mut distribution_findings);
+            ) {
+                Ok(run) => run,
+                Err(error) if is_timeout_error(&error) => {
+                    warnings.push(format!("Timed out scanning distribution {distribution}"));
+                    break;
+                }
+                Err(error) => return Err(error),
+            };
+            findings.extend(distribution_run.findings);
+            warnings.extend(distribution_run.warnings);
             ensure!(
                 findings.len() <= MAX_FINDINGS,
                 "OpenGrep produced more than {MAX_FINDINGS} findings"
             );
         }
-        Ok(findings)
+        let partial_reason = (!warnings.is_empty()).then(|| truncate(&warnings.join("; "), 2048));
+        Ok(ScanJobOutcome {
+            findings,
+            partial_reason,
+        })
     }
 }
 
@@ -260,7 +319,7 @@ fn run_opengrep(
     target_directory: &Path,
     inspector_base: &Url,
     deadline: Duration,
-) -> Result<Vec<OpenGrepFinding>> {
+) -> Result<OpenGrepRun> {
     let mut stdout_file = tempfile()?;
     let mut stderr_file = tempfile()?;
     let mut child = Command::new(binary)
@@ -305,7 +364,9 @@ fn run_opengrep(
         if started_at.elapsed() >= deadline {
             child.kill()?;
             child.wait()?;
-            bail!("OpenGrep exceeded the remaining distribution deadline");
+            return Err(
+                ScanTimeout("OpenGrep exceeded the remaining distribution deadline").into(),
+            );
         }
         thread::sleep(CHILD_POLL_INTERVAL);
     };
@@ -322,17 +383,23 @@ fn run_opengrep(
     let unexpected_errors: Vec<&Value> = document
         .errors
         .iter()
-        .filter(|error| !is_partial_parse_warning(error))
+        .filter(|error| !is_recoverable_scan_warning(error))
         .collect();
     ensure!(
         unexpected_errors.is_empty(),
         "OpenGrep reported scan errors: {}",
         serde_json::to_string(&unexpected_errors)?
     );
-    if !document.errors.is_empty() {
+    let warnings = document
+        .errors
+        .iter()
+        .filter(|error| is_recoverable_scan_warning(error))
+        .map(describe_recoverable_scan_warning)
+        .collect::<Vec<_>>();
+    if !warnings.is_empty() {
         warn!(
-            partial_parse_errors = document.errors.len(),
-            "OpenGrep partially parsed target files; preserving valid findings"
+            recoverable_scan_warnings = warnings.len(),
+            "OpenGrep reported recoverable scan warnings; preserving valid findings"
         );
     }
     ensure!(
@@ -341,21 +408,127 @@ fn run_opengrep(
         serde_json::to_string(&document.skipped_rules)?
     );
 
-    document
+    let findings = document
         .results
         .into_iter()
         .map(|finding| normalize_finding(finding, target_directory, inspector_base))
-        .collect()
+        .collect::<Result<Vec<_>>>()?;
+    Ok(OpenGrepRun { findings, warnings })
 }
 
-fn is_partial_parse_warning(error: &Value) -> bool {
-    error.get("level").and_then(Value::as_str) == Some("warn")
-        && error
+fn is_recoverable_scan_warning(error: &Value) -> bool {
+    if error.get("level").and_then(Value::as_str) != Some("warn") {
+        return false;
+    }
+    error.get("type").and_then(Value::as_str) == Some("Timeout")
+        || error
             .get("type")
             .and_then(Value::as_array)
             .and_then(|kind| kind.first())
             .and_then(Value::as_str)
             == Some("PartialParsing")
+}
+
+fn describe_recoverable_scan_warning(error: &Value) -> String {
+    if error.get("type").and_then(Value::as_str) == Some("Timeout") {
+        return error.get("rule_id").and_then(Value::as_str).map_or_else(
+            || "OpenGrep rule timed out".to_owned(),
+            |rule_id| {
+                let rule_id = rule_id
+                    .rsplit_once('.')
+                    .map_or(rule_id, |(_, identifier)| identifier);
+                format!("OpenGrep rule {} timed out", truncate(rule_id, 200))
+            },
+        );
+    }
+    let path = error
+        .get("path")
+        .and_then(Value::as_str)
+        .map_or("a target file", |path| {
+            path.rsplit('/').next().unwrap_or(path)
+        });
+    format!("OpenGrep partially parsed {}", truncate(path, 256))
+}
+
+fn is_timeout_error(error: &color_eyre::Report) -> bool {
+    error.chain().any(|source| {
+        source.downcast_ref::<ScanTimeout>().is_some()
+            || source
+                .downcast_ref::<reqwest::Error>()
+                .is_some_and(reqwest::Error::is_timeout)
+            || source
+                .downcast_ref::<io::Error>()
+                .is_some_and(|error| error.kind() == io::ErrorKind::TimedOut)
+    })
+}
+
+fn deduplicate_target_files(target_directory: &Path) -> Result<usize> {
+    let mut paths = WalkDir::new(target_directory)
+        .follow_links(false)
+        .into_iter()
+        .filter_map(|entry| match entry {
+            Ok(entry) if entry.file_type().is_file() => Some(Ok(entry.into_path())),
+            Ok(_) => None,
+            Err(error) => Some(Err(error)),
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    paths.sort_unstable();
+
+    let mut files_by_hash: HashMap<(u64, u64), Vec<PathBuf>> = HashMap::new();
+    let mut duplicate_count = 0;
+    for path in paths {
+        let fingerprint = hash_file(&path)?;
+        let candidates = files_by_hash.entry(fingerprint).or_default();
+        let mut duplicate = false;
+        for candidate in candidates.iter() {
+            if files_equal(candidate, &path)? {
+                duplicate = true;
+                break;
+            }
+        }
+        if duplicate {
+            fs::remove_file(path)?;
+            duplicate_count += 1;
+        } else {
+            candidates.push(path);
+        }
+    }
+    Ok(duplicate_count)
+}
+
+fn hash_file(path: &Path) -> Result<(u64, u64)> {
+    let mut file = File::open(path)?;
+    let length = file.metadata()?.len();
+    let mut hasher = DefaultHasher::new();
+    let mut buffer = [0_u8; 8192];
+    loop {
+        let read = file.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        buffer[..read].hash(&mut hasher);
+    }
+    Ok((length, hasher.finish()))
+}
+
+fn files_equal(first: &Path, second: &Path) -> Result<bool> {
+    let mut first = File::open(first)?;
+    let mut second = File::open(second)?;
+    let mut first_buffer = [0_u8; 8192];
+    let mut second_buffer = [0_u8; 8192];
+    loop {
+        let first_read = first.read(&mut first_buffer)?;
+        let second_read = second.read(&mut second_buffer)?;
+        if first_read != second_read {
+            return Ok(false);
+        }
+        if first_read == 0 {
+            return Ok(true);
+        }
+        if first_buffer[..first_read] != second_buffer[..second_read] {
+            return Ok(false);
+        }
+    }
 }
 
 fn read_bounded(file: &mut File) -> Result<String> {
@@ -422,7 +595,8 @@ fn truncate(value: &str, limit: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        materialize_rules, run_opengrep, safe_relative_path, validate_staging_origin, SCAN_DEADLINE,
+        deduplicate_target_files, materialize_rules, run_opengrep, safe_relative_path,
+        validate_staging_origin, SCAN_DEADLINE,
     };
     use crate::client::OpenGrepRulesResponse;
     use reqwest::Url;
@@ -505,7 +679,7 @@ rules:
         std::fs::write(target.path().join("sample.py"), "exec('safe fixture')\n").unwrap();
         let inspector = Url::parse("https://inspector.example/packages/sample/").unwrap();
 
-        let findings = run_opengrep(
+        let run = run_opengrep(
             &binary,
             rules.path(),
             target.path(),
@@ -514,10 +688,11 @@ rules:
         )
         .unwrap();
 
-        assert_eq!(findings.len(), 1);
-        assert_eq!(findings[0].rule_id, "python-test-exec");
-        assert_eq!(findings[0].path, "sample.py");
-        assert_eq!(findings[0].execution_context, "import_time");
+        assert_eq!(run.findings.len(), 1);
+        assert_eq!(run.findings[0].rule_id, "python-test-exec");
+        assert_eq!(run.findings[0].path, "sample.py");
+        assert_eq!(run.findings[0].execution_context, "import_time");
+        assert!(run.warnings.is_empty());
     }
 
     #[cfg(unix)]
@@ -569,7 +744,7 @@ printf '%s' '{
         std::fs::set_permissions(&binary, permissions).unwrap();
         let inspector = Url::parse("https://inspector.example/packages/sample/").unwrap();
 
-        let findings = run_opengrep(
+        let run = run_opengrep(
             &binary,
             rules.path(),
             target.path(),
@@ -578,13 +753,14 @@ printf '%s' '{
         )
         .unwrap();
 
-        assert_eq!(findings.len(), 1);
-        assert_eq!(findings[0].rule_id, "python-test-exec");
+        assert_eq!(run.findings.len(), 1);
+        assert_eq!(run.findings[0].rule_id, "python-test-exec");
+        assert_eq!(run.warnings.len(), 1);
     }
 
     #[cfg(unix)]
     #[test]
-    fn non_parse_scan_errors_remain_fatal() {
+    fn rule_timeouts_preserve_valid_findings() {
         use std::os::unix::fs::PermissionsExt;
 
         let rules = tempdir().unwrap();
@@ -594,7 +770,21 @@ printf '%s' '{
             &binary,
             r#"#!/bin/sh
 printf '%s' '{
-  "results": [],
+  "results": [{
+    "check_id": "python-test-exec",
+    "path": "sample.py",
+    "start": {"line": 1},
+    "end": {"line": 1},
+    "extra": {
+      "message": "Dynamic execution.",
+      "severity": "ERROR",
+      "metadata": {
+        "evidence": "composition",
+        "confidence": "high",
+        "execution_context": "import_time"
+      }
+    }
+  }],
   "errors": [{
     "code": 2,
     "level": "warn",
@@ -611,16 +801,33 @@ printf '%s' '{
         std::fs::set_permissions(&binary, permissions).unwrap();
         let inspector = Url::parse("https://inspector.example/packages/sample/").unwrap();
 
-        let error = run_opengrep(
+        let run = run_opengrep(
             &binary,
             rules.path(),
             target.path(),
             &inspector,
             SCAN_DEADLINE,
         )
-        .unwrap_err();
+        .unwrap();
 
-        assert!(error.to_string().contains("reported scan errors"));
+        assert_eq!(run.findings.len(), 1);
+        assert_eq!(run.warnings.len(), 1);
+        assert_eq!(run.warnings[0], "OpenGrep rule timed out");
+    }
+
+    #[test]
+    fn duplicate_target_files_are_removed_after_content_comparison() {
+        let target = tempdir().unwrap();
+        let nested = target.path().join("nested");
+        std::fs::create_dir(&nested).unwrap();
+        std::fs::write(target.path().join("first.py"), "print('same')\n").unwrap();
+        std::fs::write(nested.join("duplicate.py"), "print('same')\n").unwrap();
+        std::fs::write(target.path().join("different.py"), "print('diff')\n").unwrap();
+
+        assert_eq!(deduplicate_target_files(target.path()).unwrap(), 1);
+        assert!(target.path().join("first.py").exists());
+        assert!(!nested.join("duplicate.py").exists());
+        assert!(target.path().join("different.py").exists());
     }
 
     #[cfg(unix)]
