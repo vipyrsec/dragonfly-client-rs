@@ -263,8 +263,17 @@ impl OpenGrepClient {
                 }
                 Err(error) => return Err(error),
             };
-            let target_plan =
-                prepare_target(directory.path(), &package_cache, self.content_reuse_safe)?;
+            let distribution_deadline = distribution_started_at + SCAN_DEADLINE;
+            let Some(target_plan) = prepare_distribution_target(
+                directory.path(),
+                &package_cache,
+                self.content_reuse_safe,
+                distribution_deadline,
+            )?
+            else {
+                warnings.push(format!("Timed out preparing distribution {distribution}"));
+                break;
+            };
             let deduplicated_files = target_plan.deduplicated_files();
             if deduplicated_files > 0 {
                 info!(
@@ -540,16 +549,16 @@ fn prepare_target(
     target_directory: &Path,
     cache: &PackageScanCache,
     content_reuse_safe: bool,
+    deadline: Instant,
 ) -> Result<TargetPlan> {
-    let mut paths = WalkDir::new(target_directory)
-        .follow_links(false)
-        .into_iter()
-        .filter_map(|entry| match entry {
-            Ok(entry) if entry.file_type().is_file() => Some(Ok(entry.into_path())),
-            Ok(_) => None,
-            Err(error) => Some(Err(error)),
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+    let mut paths = Vec::new();
+    for entry in WalkDir::new(target_directory).follow_links(false) {
+        ensure_scan_time_remaining(deadline)?;
+        let entry = entry?;
+        if entry.file_type().is_file() {
+            paths.push(entry.into_path());
+        }
+    }
     paths.sort_unstable();
 
     let mut retained_by_identity: HashMap<FileIdentity, String> = HashMap::new();
@@ -557,11 +566,12 @@ fn prepare_target(
     let mut local_aliases = Vec::new();
     let mut reused = Vec::new();
     for path in paths {
+        ensure_scan_time_remaining(deadline)?;
         if path.metadata()?.len() > APP_CONFIG.max_scan_size {
             continue;
         }
         let relative_path = relative_target_path(&path, target_directory)?;
-        let identity = hash_file(&path)?;
+        let identity = hash_file(&path, deadline)?;
         if let Some(cached_findings) = cache
             .findings_by_file
             .get(&identity)
@@ -595,11 +605,25 @@ fn prepare_target(
     })
 }
 
-fn hash_file(path: &Path) -> Result<FileIdentity> {
+fn prepare_distribution_target(
+    target_directory: &Path,
+    cache: &PackageScanCache,
+    content_reuse_safe: bool,
+    deadline: Instant,
+) -> Result<Option<TargetPlan>> {
+    match prepare_target(target_directory, cache, content_reuse_safe, deadline) {
+        Ok(plan) => Ok(Some(plan)),
+        Err(error) if is_timeout_error(&error) => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+fn hash_file(path: &Path, deadline: Instant) -> Result<FileIdentity> {
     let mut file = File::open(path)?;
     let mut hasher = Sha256::new();
     let mut buffer = [0_u8; 8192];
     loop {
+        ensure_scan_time_remaining(deadline)?;
         let read = file.read(&mut buffer)?;
         if read == 0 {
             break;
@@ -610,6 +634,13 @@ fn hash_file(path: &Path) -> Result<FileIdentity> {
         digest: hasher.finalize().into(),
         extension: path.extension().map(OsString::from),
     })
+}
+
+fn ensure_scan_time_remaining(deadline: Instant) -> Result<()> {
+    if Instant::now() >= deadline {
+        return Err(ScanTimeout("OpenGrep preparation exceeded the distribution deadline").into());
+    }
+    Ok(())
 }
 
 fn cache_completed_file_results(
@@ -747,16 +778,17 @@ fn truncate(value: &str, limit: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        cache_completed_file_results, materialize_rules, prepare_target, rules_allow_content_reuse,
-        run_opengrep, safe_relative_path, synthesize_local_alias_findings,
-        synthesize_reused_findings, validate_staging_origin, PackageScanCache, SCAN_DEADLINE,
+        cache_completed_file_results, is_timeout_error, materialize_rules, prepare_target,
+        rules_allow_content_reuse, run_opengrep, safe_relative_path,
+        synthesize_local_alias_findings, synthesize_reused_findings, validate_staging_origin,
+        PackageScanCache, SCAN_DEADLINE,
     };
     use crate::client::{OpenGrepFinding, OpenGrepRulesResponse};
     use reqwest::Url;
     use std::{
         collections::HashMap,
         path::{Path, PathBuf},
-        time::Duration,
+        time::{Duration, Instant},
     };
     use tempfile::tempdir;
 
@@ -1007,7 +1039,13 @@ printf '%s' '{
         let first_inspector = Url::parse("https://inspector.example/first/").unwrap();
         let mut cache = PackageScanCache::default();
 
-        let first_plan = prepare_target(first_target.path(), &cache, true).unwrap();
+        let first_plan = prepare_target(
+            first_target.path(),
+            &cache,
+            true,
+            Instant::now() + SCAN_DEADLINE,
+        )
+        .unwrap();
         assert_eq!(first_plan.deduplicated_files(), 1);
         assert!(first_target.path().join("first.py").exists());
         assert!(!nested.join("duplicate.py").exists());
@@ -1039,7 +1077,13 @@ printf '%s' '{
         let second_target = tempdir().unwrap();
         std::fs::write(second_target.path().join("other.py"), "print('same')\n").unwrap();
         std::fs::write(second_target.path().join("other.txt"), "print('same')\n").unwrap();
-        let second_plan = prepare_target(second_target.path(), &cache, true).unwrap();
+        let second_plan = prepare_target(
+            second_target.path(),
+            &cache,
+            true,
+            Instant::now() + SCAN_DEADLINE,
+        )
+        .unwrap();
         let second_inspector = Url::parse("https://inspector.example/second/").unwrap();
         let reused = synthesize_reused_findings(&second_plan, &second_inspector).unwrap();
 
@@ -1061,12 +1105,35 @@ printf '%s' '{
         std::fs::write(target.path().join("first.py"), "print('same')\n").unwrap();
         std::fs::write(target.path().join("second.py"), "print('same')\n").unwrap();
 
-        let plan = prepare_target(target.path(), &PackageScanCache::default(), false).unwrap();
+        let plan = prepare_target(
+            target.path(),
+            &PackageScanCache::default(),
+            false,
+            Instant::now() + SCAN_DEADLINE,
+        )
+        .unwrap();
 
         assert_eq!(plan.retained.len(), 2);
         assert_eq!(plan.deduplicated_files(), 0);
         assert!(target.path().join("first.py").exists());
         assert!(target.path().join("second.py").exists());
+    }
+
+    #[test]
+    fn target_preparation_observes_the_distribution_deadline() {
+        let target = tempdir().unwrap();
+        std::fs::write(target.path().join("sample.py"), "print('sample')\n").unwrap();
+
+        let error = prepare_target(
+            target.path(),
+            &PackageScanCache::default(),
+            true,
+            Instant::now(),
+        )
+        .unwrap_err();
+
+        assert!(is_timeout_error(&error));
+        assert!(target.path().join("sample.py").exists());
     }
 
     #[cfg(unix)]
