@@ -5,7 +5,7 @@ use std::{
     fs::{self, File},
     io::{self, Read, Seek, SeekFrom},
     path::{Component, Path, PathBuf},
-    process::{Command, Stdio},
+    process::{Child, Command, ExitStatus, Stdio},
     thread,
     time::{Duration, Instant},
 };
@@ -37,6 +37,7 @@ const STAGING_ORIGIN: &str = "https://dragonfly-staging.vipyrsec.com";
 const MAX_FINDINGS: usize = 500;
 const MAX_OPENGREP_OUTPUT_BYTES: u64 = 4 * 1024 * 1024;
 const SCAN_DEADLINE: Duration = Duration::from_secs(60);
+const RULE_INSPECTION_DEADLINE: Duration = Duration::from_secs(10);
 const CHILD_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 #[derive(Debug, Deserialize)]
@@ -161,8 +162,8 @@ impl OpenGrepClient {
         let download_client = build_download_http_client()?;
         let response = fetch_opengrep_rules(&api_client, &APP_CONFIG.base_url)?;
         let rules_hash = response.hash.clone();
-        let content_reuse_safe = rules_allow_content_reuse(&response);
         let rules_directory = materialize_rules(&response)?;
+        let content_reuse_safe = rules_allow_content_reuse(&binary, rules_directory.path())?;
         Ok(Self {
             api_client,
             download_client,
@@ -181,8 +182,8 @@ impl OpenGrepClient {
     /// Returns an error when retrieval or safe materialization fails.
     pub fn refresh_rules(&mut self) -> Result<()> {
         let response = fetch_opengrep_rules(&self.api_client, &self.base_url)?;
-        let content_reuse_safe = rules_allow_content_reuse(&response);
         let rules_directory = materialize_rules(&response)?;
+        let content_reuse_safe = rules_allow_content_reuse(&self.binary, rules_directory.path())?;
         self.rules_hash = response.hash;
         self.rules_directory = rules_directory;
         self.content_reuse_safe = content_reuse_safe;
@@ -383,14 +384,41 @@ fn materialize_rules(response: &OpenGrepRulesResponse) -> Result<TempDir> {
     Ok(directory)
 }
 
-fn rules_allow_content_reuse(response: &OpenGrepRulesResponse) -> bool {
-    !response.rules.values().any(|contents| {
-        contents
-            .chars()
-            .filter(|character| !character.is_whitespace() && !matches!(character, '\'' | '"'))
-            .collect::<String>()
-            .contains("paths:")
-    })
+fn rules_allow_content_reuse(binary: &Path, rules_directory: &Path) -> Result<bool> {
+    let mut stdout_file = tempfile()?;
+    let mut stderr_file = tempfile()?;
+    let mut child = Command::new(binary)
+        .args([
+            "show",
+            "dump-config",
+            rules_directory
+                .to_str()
+                .ok_or_else(|| color_eyre::eyre::eyre!("rule path is not UTF-8"))?,
+        ])
+        .env("HOME", "/tmp")
+        .env("XDG_CACHE_HOME", "/tmp")
+        .env("OPENGREP_ENABLE_VERSION_CHECK", "0")
+        .stdout(Stdio::from(stdout_file.try_clone()?))
+        .stderr(Stdio::from(stderr_file.try_clone()?))
+        .spawn()
+        .wrap_err("failed to inspect OpenGrep rules")?;
+    let status = wait_for_child(
+        &mut child,
+        &stdout_file,
+        &stderr_file,
+        RULE_INSPECTION_DEADLINE,
+        "OpenGrep rule inspection exceeded its deadline",
+    )?;
+    let stderr = read_bounded(&mut stderr_file)?;
+    ensure!(
+        status.success(),
+        "OpenGrep rule inspection exited with {status}: {}",
+        truncate(&stderr, 1024)
+    );
+    let parsed_rules = read_bounded(&mut stdout_file)?;
+    let rule_count = parsed_rules.matches("Rule.id = (").count();
+    ensure!(rule_count > 0, "OpenGrep rule inspection returned no rules");
+    Ok(rule_count == parsed_rules.matches("paths = None;").count())
 }
 
 fn safe_relative_path(value: &str) -> Result<PathBuf> {
@@ -440,27 +468,13 @@ fn run_opengrep(
         .spawn()
         .wrap_err("failed to start OpenGrep")?;
 
-    let started_at = Instant::now();
-    let status = loop {
-        if let Some(status) = child.try_wait()? {
-            break status;
-        }
-        let output_too_large = stdout_file.metadata()?.len() > MAX_OPENGREP_OUTPUT_BYTES
-            || stderr_file.metadata()?.len() > MAX_OPENGREP_OUTPUT_BYTES;
-        if output_too_large {
-            child.kill()?;
-            child.wait()?;
-            bail!("OpenGrep output exceeded {MAX_OPENGREP_OUTPUT_BYTES} bytes");
-        }
-        if started_at.elapsed() >= deadline {
-            child.kill()?;
-            child.wait()?;
-            return Err(
-                ScanTimeout("OpenGrep exceeded the remaining distribution deadline").into(),
-            );
-        }
-        thread::sleep(CHILD_POLL_INTERVAL);
-    };
+    let status = wait_for_child(
+        &mut child,
+        &stdout_file,
+        &stderr_file,
+        deadline,
+        "OpenGrep exceeded the remaining distribution deadline",
+    )?;
 
     let stderr = read_bounded(&mut stderr_file)?;
     ensure!(
@@ -505,6 +519,34 @@ fn run_opengrep(
         .map(|finding| normalize_finding(finding, target_directory, inspector_base))
         .collect::<Result<Vec<_>>>()?;
     Ok(OpenGrepRun { findings, warnings })
+}
+
+fn wait_for_child(
+    child: &mut Child,
+    stdout_file: &File,
+    stderr_file: &File,
+    deadline: Duration,
+    timeout_message: &'static str,
+) -> Result<ExitStatus> {
+    let started_at = Instant::now();
+    loop {
+        if let Some(status) = child.try_wait()? {
+            return Ok(status);
+        }
+        let output_too_large = stdout_file.metadata()?.len() > MAX_OPENGREP_OUTPUT_BYTES
+            || stderr_file.metadata()?.len() > MAX_OPENGREP_OUTPUT_BYTES;
+        if output_too_large {
+            child.kill()?;
+            child.wait()?;
+            bail!("OpenGrep output exceeded {MAX_OPENGREP_OUTPUT_BYTES} bytes");
+        }
+        if started_at.elapsed() >= deadline {
+            child.kill()?;
+            child.wait()?;
+            return Err(ScanTimeout(timeout_message).into());
+        }
+        thread::sleep(CHILD_POLL_INTERVAL);
+    }
 }
 
 fn is_recoverable_scan_warning(error: &Value) -> bool {
@@ -847,32 +889,25 @@ mod tests {
     }
 
     #[test]
-    fn path_scoped_rules_disable_content_reuse() {
-        let content_only = OpenGrepRulesResponse {
-            hash: "content-only".to_owned(),
-            rules: HashMap::from([(
-                "python/content.yml".to_owned(),
-                "rules:\n  - id: content-only\n    pattern: exec(...)\n".to_owned(),
-            )]),
+    fn installed_opengrep_structurally_detects_path_scoped_rules() {
+        let Some(binary) = std::env::var_os("OPENGREP_BIN").map(PathBuf::from) else {
+            return;
         };
-        let path_scoped = OpenGrepRulesResponse {
-            hash: "path-scoped".to_owned(),
-            rules: HashMap::from([(
-                "python/path.yml".to_owned(),
-                "rules:\n  - id: path-scoped\n    paths:\n      include: [src/**]\n".to_owned(),
-            )]),
-        };
-        let quoted_path_scoped = OpenGrepRulesResponse {
-            hash: "quoted-path-scoped".to_owned(),
-            rules: HashMap::from([(
-                "python/quoted-path.yml".to_owned(),
-                "rules:\n  - id: path-scoped\n    'paths' : {include: [src/**]}\n".to_owned(),
-            )]),
-        };
+        let rules = tempdir().unwrap();
+        let rule_path = rules.path().join("rule.yml");
+        std::fs::write(
+            &rule_path,
+            "rules:\n  - id: content-only\n    message: test\n    languages: [python]\n    severity: ERROR\n    pattern: exec(...)\n",
+        )
+        .unwrap();
+        assert!(rules_allow_content_reuse(&binary, rules.path()).unwrap());
 
-        assert!(rules_allow_content_reuse(&content_only));
-        assert!(!rules_allow_content_reuse(&path_scoped));
-        assert!(!rules_allow_content_reuse(&quoted_path_scoped));
+        std::fs::write(
+            rule_path,
+            "rules:\n  - id: path-scoped\n    message: test\n    languages: [python]\n    severity: ERROR\n    'paths' : {include: [src/**]}\n    pattern: exec(...)\n",
+        )
+        .unwrap();
+        assert!(!rules_allow_content_reuse(&binary, rules.path()).unwrap());
     }
 
     #[test]
