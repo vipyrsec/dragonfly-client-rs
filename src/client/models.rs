@@ -81,7 +81,7 @@ pub struct OpenGrepRulesResponse {
     pub rules: HashMap<String, String>,
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct OpenGrepFinding {
     pub rule_id: String,
     pub path: String,

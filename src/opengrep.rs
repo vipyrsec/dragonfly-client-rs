@@ -1,8 +1,8 @@
 use std::{
-    collections::{hash_map::DefaultHasher, HashMap},
+    collections::HashMap,
     error::Error as StdError,
+    ffi::OsString,
     fs::{self, File},
-    hash::{Hash, Hasher},
     io::{self, Read, Seek, SeekFrom},
     path::{Component, Path, PathBuf},
     process::{Command, Stdio},
@@ -17,6 +17,7 @@ use color_eyre::{
 use reqwest::{blocking::Client, Url};
 use serde::Deserialize;
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use tempfile::{tempdir, tempfile, TempDir};
 use tracing::{info, warn};
 use walkdir::WalkDir;
@@ -96,6 +97,42 @@ struct OpenGrepRun {
 struct ScanJobOutcome {
     findings: Vec<OpenGrepFinding>,
     partial_reason: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct FileIdentity {
+    digest: [u8; 32],
+    extension: Option<OsString>,
+}
+
+#[derive(Debug, Default)]
+struct PackageScanCache {
+    findings_by_file: HashMap<FileIdentity, Vec<OpenGrepFinding>>,
+}
+
+#[derive(Debug)]
+struct RetainedFile {
+    identity: FileIdentity,
+    path: String,
+}
+
+#[derive(Debug)]
+struct ReusedFile {
+    findings: Vec<OpenGrepFinding>,
+    path: String,
+}
+
+#[derive(Debug)]
+struct TargetPlan {
+    retained: Vec<RetainedFile>,
+    local_aliases: Vec<(String, String)>,
+    reused: Vec<ReusedFile>,
+}
+
+impl TargetPlan {
+    fn deduplicated_files(&self) -> usize {
+        self.local_aliases.len() + self.reused.len()
+    }
 }
 
 pub struct OpenGrepClient {
@@ -202,6 +239,7 @@ impl OpenGrepClient {
         );
         let mut findings = Vec::new();
         let mut warnings = Vec::new();
+        let mut package_cache = PackageScanCache::default();
         for distribution in &job.distributions {
             let distribution_started_at = Instant::now();
             let download_url: Url = distribution.parse()?;
@@ -220,21 +258,26 @@ impl OpenGrepClient {
                 }
                 Err(error) => return Err(error),
             };
-            let Some(remaining) = SCAN_DEADLINE.checked_sub(distribution_started_at.elapsed())
-            else {
-                warnings.push(format!(
-                    "Timed out downloading or extracting distribution {distribution}"
-                ));
-                break;
-            };
-            let deduplicated_files = deduplicate_target_files(directory.path())?;
+            let target_plan = prepare_target(directory.path(), &package_cache)?;
+            let deduplicated_files = target_plan.deduplicated_files();
             if deduplicated_files > 0 {
                 info!(
                     package = %job.name,
                     version = %job.version,
                     deduplicated_files,
-                    "Removed duplicate files before OpenGrep scan"
+                    "Reused file results before OpenGrep scan"
                 );
+            }
+            let reused_findings = synthesize_reused_findings(&target_plan, &inspector_url)?;
+            let Some(remaining) = SCAN_DEADLINE.checked_sub(distribution_started_at.elapsed())
+            else {
+                findings.extend(reused_findings);
+                warnings.push(format!("Timed out preparing distribution {distribution}"));
+                break;
+            };
+            if target_plan.retained.is_empty() {
+                findings.extend(reused_findings);
+                continue;
             }
             let distribution_run = match run_opengrep(
                 &self.binary,
@@ -245,12 +288,27 @@ impl OpenGrepClient {
             ) {
                 Ok(run) => run,
                 Err(error) if is_timeout_error(&error) => {
+                    findings.extend(reused_findings);
                     warnings.push(format!("Timed out scanning distribution {distribution}"));
                     break;
                 }
                 Err(error) => return Err(error),
             };
+            let mut alias_findings = synthesize_local_alias_findings(
+                &target_plan,
+                &distribution_run.findings,
+                &inspector_url,
+            )?;
+            if distribution_run.warnings.is_empty() {
+                cache_completed_file_results(
+                    &target_plan,
+                    &distribution_run.findings,
+                    &mut package_cache,
+                );
+            }
             findings.extend(distribution_run.findings);
+            findings.extend(reused_findings);
+            findings.append(&mut alias_findings);
             warnings.extend(distribution_run.warnings);
             ensure!(
                 findings.len() <= MAX_FINDINGS,
@@ -462,7 +520,7 @@ fn is_timeout_error(error: &color_eyre::Report) -> bool {
     })
 }
 
-fn deduplicate_target_files(target_directory: &Path) -> Result<usize> {
+fn prepare_target(target_directory: &Path, cache: &PackageScanCache) -> Result<TargetPlan> {
     let mut paths = WalkDir::new(target_directory)
         .follow_links(false)
         .into_iter()
@@ -474,61 +532,118 @@ fn deduplicate_target_files(target_directory: &Path) -> Result<usize> {
         .collect::<Result<Vec<_>, _>>()?;
     paths.sort_unstable();
 
-    let mut files_by_hash: HashMap<(u64, u64), Vec<PathBuf>> = HashMap::new();
-    let mut duplicate_count = 0;
+    let mut retained_by_identity: HashMap<FileIdentity, String> = HashMap::new();
+    let mut retained = Vec::new();
+    let mut local_aliases = Vec::new();
+    let mut reused = Vec::new();
     for path in paths {
-        let fingerprint = hash_file(&path)?;
-        let candidates = files_by_hash.entry(fingerprint).or_default();
-        let mut duplicate = false;
-        for candidate in candidates.iter() {
-            if files_equal(candidate, &path)? {
-                duplicate = true;
-                break;
-            }
+        if path.metadata()?.len() > APP_CONFIG.max_scan_size {
+            continue;
         }
-        if duplicate {
+        let relative_path = relative_target_path(&path, target_directory)?;
+        let identity = hash_file(&path)?;
+        if let Some(cached_findings) = cache.findings_by_file.get(&identity) {
             fs::remove_file(path)?;
-            duplicate_count += 1;
-        } else {
-            candidates.push(path);
+            reused.push(ReusedFile {
+                findings: cached_findings.clone(),
+                path: relative_path,
+            });
+            continue;
         }
+        if let Some(canonical_path) = retained_by_identity.get(&identity) {
+            fs::remove_file(path)?;
+            local_aliases.push((relative_path, canonical_path.clone()));
+            continue;
+        }
+        retained_by_identity.insert(identity.clone(), relative_path.clone());
+        retained.push(RetainedFile {
+            identity,
+            path: relative_path,
+        });
     }
-    Ok(duplicate_count)
+    Ok(TargetPlan {
+        retained,
+        local_aliases,
+        reused,
+    })
 }
 
-fn hash_file(path: &Path) -> Result<(u64, u64)> {
+fn hash_file(path: &Path) -> Result<FileIdentity> {
     let mut file = File::open(path)?;
-    let length = file.metadata()?.len();
-    let mut hasher = DefaultHasher::new();
+    let mut hasher = Sha256::new();
     let mut buffer = [0_u8; 8192];
     loop {
         let read = file.read(&mut buffer)?;
         if read == 0 {
             break;
         }
-        buffer[..read].hash(&mut hasher);
+        hasher.update(&buffer[..read]);
     }
-    Ok((length, hasher.finish()))
+    Ok(FileIdentity {
+        digest: hasher.finalize().into(),
+        extension: path.extension().map(OsString::from),
+    })
 }
 
-fn files_equal(first: &Path, second: &Path) -> Result<bool> {
-    let mut first = File::open(first)?;
-    let mut second = File::open(second)?;
-    let mut first_buffer = [0_u8; 8192];
-    let mut second_buffer = [0_u8; 8192];
-    loop {
-        let first_read = first.read(&mut first_buffer)?;
-        let second_read = second.read(&mut second_buffer)?;
-        if first_read != second_read {
-            return Ok(false);
-        }
-        if first_read == 0 {
-            return Ok(true);
-        }
-        if first_buffer[..first_read] != second_buffer[..second_read] {
-            return Ok(false);
-        }
+fn cache_completed_file_results(
+    target_plan: &TargetPlan,
+    findings: &[OpenGrepFinding],
+    cache: &mut PackageScanCache,
+) {
+    for file in &target_plan.retained {
+        let file_findings = findings
+            .iter()
+            .filter(|finding| finding.path == file.path)
+            .cloned()
+            .collect();
+        cache
+            .findings_by_file
+            .insert(file.identity.clone(), file_findings);
     }
+}
+
+fn synthesize_reused_findings(
+    target_plan: &TargetPlan,
+    inspector_base: &Url,
+) -> Result<Vec<OpenGrepFinding>> {
+    target_plan
+        .reused
+        .iter()
+        .flat_map(|file| {
+            file.findings
+                .iter()
+                .map(|finding| rewrite_finding_location(finding, &file.path, inspector_base))
+        })
+        .collect()
+}
+
+fn synthesize_local_alias_findings(
+    target_plan: &TargetPlan,
+    findings: &[OpenGrepFinding],
+    inspector_base: &Url,
+) -> Result<Vec<OpenGrepFinding>> {
+    target_plan
+        .local_aliases
+        .iter()
+        .flat_map(|(alias_path, canonical_path)| {
+            findings
+                .iter()
+                .filter(move |finding| finding.path == *canonical_path)
+                .map(|finding| rewrite_finding_location(finding, alias_path, inspector_base))
+        })
+        .collect()
+}
+
+fn rewrite_finding_location(
+    finding: &OpenGrepFinding,
+    path: &str,
+    inspector_base: &Url,
+) -> Result<OpenGrepFinding> {
+    ensure!(path.len() <= 1024, "finding path exceeds 1024 characters");
+    let mut finding = finding.clone();
+    path.clone_into(&mut finding.path);
+    finding.inspector_url = build_inspector_url(inspector_base, path)?;
+    Ok(finding)
 }
 
 fn read_bounded(file: &mut File) -> Result<String> {
@@ -548,27 +663,12 @@ fn normalize_finding(
     target_directory: &Path,
     inspector_base: &Url,
 ) -> Result<OpenGrepFinding> {
-    let relative_path = if finding.path.is_absolute() {
-        finding.path.strip_prefix(target_directory)?.to_path_buf()
-    } else {
-        finding.path
-    };
-    let relative_path = safe_relative_path(
-        relative_path
-            .to_str()
-            .ok_or_else(|| color_eyre::eyre::eyre!("finding path is not UTF-8"))?,
-    )?;
-    let path = relative_path.to_string_lossy().replace('\\', "/");
-    ensure!(path.len() <= 1024, "finding path exceeds 1024 characters");
+    let path = relative_target_path(&finding.path, target_directory)?;
     ensure!(
         finding.extra.message.len() <= 1024,
         "finding message exceeds 1024 characters"
     );
-    let inspector_url = format!("{}{}", inspector_base.as_str(), path);
-    ensure!(
-        inspector_url.len() <= 2048,
-        "finding inspector URL exceeds 2048 characters"
-    );
+    let inspector_url = build_inspector_url(inspector_base, &path)?;
     let rule_id = finding
         .check_id
         .rsplit_once('.')
@@ -588,6 +688,31 @@ fn normalize_finding(
     })
 }
 
+fn relative_target_path(path: &Path, target_directory: &Path) -> Result<String> {
+    let relative_path = if path.is_absolute() {
+        path.strip_prefix(target_directory)?.to_path_buf()
+    } else {
+        path.to_path_buf()
+    };
+    let relative_path = safe_relative_path(
+        relative_path
+            .to_str()
+            .ok_or_else(|| color_eyre::eyre::eyre!("finding path is not UTF-8"))?,
+    )?;
+    let path = relative_path.to_string_lossy().replace('\\', "/");
+    ensure!(path.len() <= 1024, "finding path exceeds 1024 characters");
+    Ok(path)
+}
+
+fn build_inspector_url(inspector_base: &Url, path: &str) -> Result<String> {
+    let inspector_url = format!("{}{}", inspector_base.as_str(), path);
+    ensure!(
+        inspector_url.len() <= 2048,
+        "finding inspector URL exceeds 2048 characters"
+    );
+    Ok(inspector_url)
+}
+
 fn truncate(value: &str, limit: usize) -> String {
     value.chars().take(limit).collect()
 }
@@ -595,10 +720,11 @@ fn truncate(value: &str, limit: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        deduplicate_target_files, materialize_rules, run_opengrep, safe_relative_path,
-        validate_staging_origin, SCAN_DEADLINE,
+        cache_completed_file_results, materialize_rules, prepare_target, run_opengrep,
+        safe_relative_path, synthesize_local_alias_findings, synthesize_reused_findings,
+        validate_staging_origin, PackageScanCache, SCAN_DEADLINE,
     };
-    use crate::client::OpenGrepRulesResponse;
+    use crate::client::{OpenGrepFinding, OpenGrepRulesResponse};
     use reqwest::Url;
     use std::{
         collections::HashMap,
@@ -816,18 +942,61 @@ printf '%s' '{
     }
 
     #[test]
-    fn duplicate_target_files_are_removed_after_content_comparison() {
-        let target = tempdir().unwrap();
-        let nested = target.path().join("nested");
+    fn package_cache_reuses_findings_for_duplicate_content() {
+        let first_target = tempdir().unwrap();
+        let nested = first_target.path().join("nested");
         std::fs::create_dir(&nested).unwrap();
-        std::fs::write(target.path().join("first.py"), "print('same')\n").unwrap();
+        std::fs::write(first_target.path().join("first.py"), "print('same')\n").unwrap();
         std::fs::write(nested.join("duplicate.py"), "print('same')\n").unwrap();
-        std::fs::write(target.path().join("different.py"), "print('diff')\n").unwrap();
+        let first_inspector = Url::parse("https://inspector.example/first/").unwrap();
+        let mut cache = PackageScanCache::default();
 
-        assert_eq!(deduplicate_target_files(target.path()).unwrap(), 1);
-        assert!(target.path().join("first.py").exists());
+        let first_plan = prepare_target(first_target.path(), &cache).unwrap();
+        assert_eq!(first_plan.deduplicated_files(), 1);
+        assert!(first_target.path().join("first.py").exists());
         assert!(!nested.join("duplicate.py").exists());
-        assert!(target.path().join("different.py").exists());
+        let first_finding = OpenGrepFinding {
+            rule_id: "python-test-exec".to_owned(),
+            path: "first.py".to_owned(),
+            start_line: 1,
+            end_line: 1,
+            message: "Dynamic execution.".to_owned(),
+            severity: "ERROR".to_owned(),
+            evidence: "composition".to_owned(),
+            confidence: "high".to_owned(),
+            execution_context: "import_time".to_owned(),
+            inspector_url: "https://inspector.example/first/first.py".to_owned(),
+        };
+        let alias_findings = synthesize_local_alias_findings(
+            &first_plan,
+            std::slice::from_ref(&first_finding),
+            &first_inspector,
+        )
+        .unwrap();
+        assert_eq!(alias_findings[0].path, "nested/duplicate.py");
+        cache_completed_file_results(
+            &first_plan,
+            std::slice::from_ref(&first_finding),
+            &mut cache,
+        );
+
+        let second_target = tempdir().unwrap();
+        std::fs::write(second_target.path().join("other.py"), "print('same')\n").unwrap();
+        std::fs::write(second_target.path().join("other.txt"), "print('same')\n").unwrap();
+        let second_plan = prepare_target(second_target.path(), &cache).unwrap();
+        let second_inspector = Url::parse("https://inspector.example/second/").unwrap();
+        let reused = synthesize_reused_findings(&second_plan, &second_inspector).unwrap();
+
+        assert_eq!(second_plan.deduplicated_files(), 1);
+        assert!(!second_target.path().join("other.py").exists());
+        assert!(second_target.path().join("other.txt").exists());
+        assert_eq!(reused.len(), 1);
+        assert_eq!(reused[0].rule_id, "python-test-exec");
+        assert_eq!(reused[0].path, "other.py");
+        assert_eq!(
+            reused[0].inspector_url,
+            "https://inspector.example/second/other.py"
+        );
     }
 
     #[cfg(unix)]
