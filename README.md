@@ -23,6 +23,15 @@ This section goes over how to set up a client instance locally and via Docker.
 export YARA_LIBRARY_PATH='/path/to/yara/libs'
 ```
 
+> [!IMPORTANT]
+> When building on an arm-based distribution of macOS, be sure to specify
+> the following environment variables:
+> | Name              | Example Value                             |
+> |-------------------|-------------------------------------------|
+> | YARA_INCLUDE_DIR  | /opt/homebrew/Cellar/yara/4.3.2_1/include |
+> | YARA_LIBRARY_PATH | /opt/homebrew/Cellar/yara/4.3.2_1/lib     |
+> | YARA_OPENSSL_DIR  | /opt/homebrew/opt/openssl@3.2             |
+
 #### 2. Build the binary with `cargo`
 
 ```bash

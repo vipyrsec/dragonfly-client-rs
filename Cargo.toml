@@ -23,6 +23,9 @@ yara = "0.31.0"
 yara-sys = {version = "0.31.0", features = ["vendored"]}
 zip = {version = "7.0.0", default-features = false, features = ["deflate-flate2-zlib-rs"]}
 
+[target.'cfg(target_os = "macos")'.dependencies]
+yara-sys = { version = "0.20.0", features = ["yara-static", "vendored"] }
+
 [profile.release]
 strip = true
 lto = true
