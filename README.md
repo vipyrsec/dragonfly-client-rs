@@ -186,7 +186,8 @@ Replicas do not share entries. Existing within-package deduplication remains.
 Successful content results, including clean results, can be reused across
 package releases. Paths and Inspector locations are reconstructed for the
 current package. OpenGrep additionally keys by extension, bypasses content reuse
-for path-scoped rules or any rule options, dependency/validator context, or non-search/taint modes, and only admits explicitly scanned targets from complete,
+for path-scoped rules or any rule options, dependency/validator context, or
+non-search/taint modes, and only admits explicitly scanned targets from complete,
 warning-free runs. Its timeout fallback groups do not populate this cache.
 
 `observe` rescans every candidate and compares results. `reuse` rescans every
