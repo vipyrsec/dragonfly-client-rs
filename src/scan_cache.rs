@@ -114,6 +114,9 @@ impl<'a> ScanCache<'a> {
                         event = "scan_reuse_mismatch",
                         "Cached YARA results differ from fresh scan"
                     );
+                    color_eyre::eyre::bail!(
+                        "Cache validation failed; cached results for this job must be discarded"
+                    );
                 }
             }
             if let Some(cache) = self.reuse {
@@ -223,6 +226,31 @@ mod tests {
             .unwrap()
             .compile_rules()
             .unwrap()
+    }
+
+    #[test]
+    fn a_sample_mismatch_rejects_the_scan_and_disables_reuse() {
+        use crate::reuse_cache::{CacheMode, CacheStats, ReuseCache};
+        let rules = rules();
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("danger.py");
+        fs::write(&path, b"danger").unwrap();
+        let shared = ReuseCache::new(CacheMode::Reuse, 10, 1024);
+        let mut setup = CacheStats::new("yara", CacheMode::Reuse);
+        shared.insert(
+            format!("{:032x}:6", hash_file(&path).unwrap()),
+            &path,
+            &Vec::<super::ContentMatch>::new(),
+            &mut setup,
+        );
+        for _ in 0..99 {
+            assert!(shared.should_reuse());
+        }
+        let mut cache = ScanCache::new(&rules, 10, 1024).unwrap();
+        cache.set_reuse(Some(&shared));
+        assert!(cache.scan(&path, 1024).is_err());
+        assert_eq!(cache.stats.mismatched_files, 1);
+        assert!(shared.is_disabled());
     }
 
     #[test]

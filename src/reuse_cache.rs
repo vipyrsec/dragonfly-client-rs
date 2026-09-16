@@ -59,8 +59,12 @@ impl ReuseCache {
             && !(self.hits.fetch_add(1, Ordering::Relaxed) + 1).is_multiple_of(100)
     }
 
+    pub(crate) fn is_disabled(&self) -> bool {
+        self.disabled.load(Ordering::Acquire)
+    }
+
     pub(crate) fn disable(&self) {
-        self.disabled.store(true, Ordering::Relaxed);
+        self.disabled.store(true, Ordering::Release);
     }
 
     pub(crate) fn clear(&mut self) {

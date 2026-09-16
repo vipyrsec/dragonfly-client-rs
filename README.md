@@ -186,11 +186,14 @@ Replicas do not share entries. Existing within-package deduplication remains.
 Successful content results, including clean results, can be reused across
 package releases. Paths and Inspector locations are reconstructed for the
 current package. OpenGrep additionally keys by extension, bypasses content reuse
-for path-scoped rules, and only admits explicitly scanned targets from complete,
+for path-scoped rules or any rule options, dependency/validator context, or non-search/taint modes, and only admits explicitly scanned targets from complete,
 warning-free runs. Its timeout fallback groups do not populate this cache.
 
 `observe` rescans every candidate and compares results. `reuse` rescans every
-hundredth hit; a mismatch disables the cache until a rules reload or restart.
+hundredth hit; a mismatch disables the cache until a rules reload or restart
+and rejects the active job rather than publishing a mix of suspect cached results.
+Reuse mode requires `DRAGONFLY_THREADS=1` to make this invalidation atomic across
+the active job. Replica-level parallelism still uses independent caches.
 Cache I/O/decoding failures fall back to scanning. Scan failures are not cached.
 
 Each job emits `event="scan_reuse"` with scanner, mode, rules commit (in its job

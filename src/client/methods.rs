@@ -131,6 +131,55 @@ mod tests {
     }
 
     #[test]
+    fn telemetry_is_flattened_into_success_and_failure_wire_payloads() {
+        use crate::{
+            client::SubmitJobResultsSuccess,
+            reuse_cache::{CacheMode, CacheStats},
+        };
+        for success in [true, false] {
+            let (base_url, request) = serve_once("");
+            let client = build_api_http_client(CLIENT_ID, CLIENT_SECRET).unwrap();
+            let result = if success {
+                Ok(SubmitJobResultsSuccess {
+                    name: "example".into(),
+                    version: "1".into(),
+                    attempt: 1,
+                    assignment_id: "lease".into(),
+                    score: 0,
+                    inspector_url: None,
+                    rules_matched: Vec::new(),
+                    commit: "rules".into(),
+                })
+            } else {
+                Err(SubmitJobResultsError {
+                    name: "example".into(),
+                    version: "1".into(),
+                    attempt: 1,
+                    assignment_id: "lease".into(),
+                    reason: "failure".into(),
+                })
+            };
+            let mut stats = CacheStats::new("yara", CacheMode::Reuse);
+            stats.reused_files = 7;
+            stats.engine_us = 123;
+            super::send_result_with_metrics(&client, &base_url, result, Some(&stats)).unwrap();
+            let request = request.recv().unwrap();
+            assert!(request.starts_with("PUT /package HTTP/1.1\r\n"));
+            assert_cloudflare_access_headers(&request);
+            let body: serde_json::Value =
+                serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap();
+            assert_eq!(body["name"], "example");
+            assert_eq!(body["assignment_id"], "lease");
+            assert_eq!(body["scan_reuse"]["mode"], "reuse");
+            assert_eq!(body["scan_reuse"]["reused_files"], 7);
+            assert_eq!(body["scan_reuse"]["engine_us"], 123);
+            assert_eq!(body.get("commit").is_some(), success);
+            assert_eq!(body.get("reason").is_some(), !success);
+            assert!(body.get("result").is_none());
+        }
+    }
+
+    #[test]
     fn jobs_route_uses_cloudflare_access_service_token() {
         let (base_url, request) = serve_once("[]");
         let client = build_api_http_client(CLIENT_ID, CLIENT_SECRET).unwrap();

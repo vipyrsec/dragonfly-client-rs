@@ -161,6 +161,8 @@ fn main() -> Result<()> {
 
     tracing_subscriber::fmt().with_env_filter(env_filter).init();
     let mut client = DragonflyClient::new()?;
+    ensure!(APP_CONFIG.reuse_cache_mode != crate::reuse_cache::CacheMode::Reuse || APP_CONFIG.threads == 1,
+        "Cross-package reuse requires DRAGONFLY_THREADS=1 so validation can invalidate the entire active job");
     ensure!(
         APP_CONFIG.threads > 0,
         "DRAGONFLY_THREADS must be greater than zero"
