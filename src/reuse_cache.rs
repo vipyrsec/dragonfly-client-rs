@@ -34,6 +34,7 @@ struct State {
 
 pub(crate) struct ReuseCache {
     pub mode: CacheMode,
+    remote: Option<Mutex<crate::durable_cache::DurableCache>>,
     max_entries: usize,
     max_bytes: usize,
     state: Mutex<State>,
@@ -45,11 +46,74 @@ impl ReuseCache {
     pub(crate) fn new(mode: CacheMode, max_entries: usize, max_bytes: usize) -> Self {
         Self {
             mode,
+            remote: None,
             max_entries,
             max_bytes,
             state: Mutex::new(State::default()),
             hits: AtomicU64::new(0),
             disabled: AtomicBool::new(false),
+        }
+    }
+
+    pub(crate) fn set_database(&mut self, remote: crate::durable_cache::DurableCache) {
+        self.remote = Some(Mutex::new(remote));
+    }
+
+    pub(crate) fn uses_database(&self) -> bool {
+        self.remote.is_some()
+    }
+
+    pub(crate) fn begin_job(&self, job: &crate::client::Job) {
+        if let Some(remote) = &self.remote {
+            if let Ok(mut remote) = remote.lock() {
+                remote.begin_job(crate::durable_cache::Lease {
+                    name: job.name.clone(),
+                    version: job.version.clone(),
+                    assignment_id: job.assignment_id.clone(),
+                    attempt: job.attempt,
+                });
+            }
+        }
+    }
+
+    pub(crate) fn prefetch(
+        &self,
+        keys: &[(String, crate::durable_cache::Key)],
+        stats: &mut CacheStats,
+    ) {
+        self.remote_operation(stats, |remote| remote.prefetch(keys));
+    }
+
+    pub(crate) fn flush(&self, stats: &mut CacheStats) {
+        self.remote_operation(stats, crate::durable_cache::DurableCache::flush);
+    }
+
+    fn remote_operation(
+        &self,
+        stats: &mut CacheStats,
+        operation: impl FnOnce(&mut crate::durable_cache::DurableCache) -> color_eyre::Result<()>,
+    ) {
+        if self.mode == CacheMode::Off || self.disabled.load(Ordering::Acquire) {
+            return;
+        }
+        let Some(remote) = &self.remote else {
+            return;
+        };
+        let started = Instant::now();
+        let result = (|| {
+            let mut remote = remote
+                .lock()
+                .map_err(|_| color_eyre::eyre::eyre!("cache lock poisoned"))?;
+            let result = operation(&mut remote);
+            if remote.revoked {
+                self.disabled.store(true, Ordering::Release);
+            }
+            result
+        })();
+        stats.overhead_us += started.elapsed().as_micros();
+        if let Err(error) = result {
+            stats.errors += 1;
+            tracing::warn!(event="scan_reuse_error", %error, "Database cache unavailable; scanning normally");
         }
     }
 
@@ -65,6 +129,13 @@ impl ReuseCache {
 
     pub(crate) fn disable(&self) {
         self.disabled.store(true, Ordering::Release);
+        if let Some(remote) = &self.remote {
+            if let Ok(mut remote) = remote.lock() {
+                if let Err(error) = remote.revoke() {
+                    tracing::error!(event="scan_cache_revocation_failed", %error, "Failed to persist cache revocation");
+                }
+            }
+        }
     }
 
     pub(crate) fn clear(&mut self) {
@@ -101,6 +172,12 @@ impl ReuseCache {
     }
 
     fn read<T: DeserializeOwned>(&self, key: &str, path: &Path) -> color_eyre::Result<Option<T>> {
+        if let Some(remote) = &self.remote {
+            return remote
+                .lock()
+                .map_err(|_| color_eyre::eyre::eyre!("cache lock poisoned"))?
+                .lookup(key);
+        }
         let state = self
             .state
             .lock()
@@ -143,6 +220,12 @@ impl ReuseCache {
         value: &T,
         stats: &mut CacheStats,
     ) -> color_eyre::Result<()> {
+        if let Some(remote) = &self.remote {
+            return remote
+                .lock()
+                .map_err(|_| color_eyre::eyre::eyre!("cache lock poisoned"))?
+                .insert(&key, value);
+        }
         if path.metadata()?.len() > u64::try_from(self.max_bytes)? {
             return Ok(());
         }

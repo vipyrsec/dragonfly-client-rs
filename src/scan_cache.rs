@@ -5,7 +5,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use color_eyre::{eyre::ensure, Result};
+#[cfg(test)]
+use color_eyre::eyre::ensure;
+use color_eyre::Result;
+use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 use xxhash_rust::xxh3::Xxh3;
 use yara::Rules;
@@ -16,6 +19,11 @@ use crate::{exts::RuleExt, scanner::RuleScore};
 struct ContentMatch {
     score: RuleScore,
     filetypes: Vec<String>,
+}
+
+pub(crate) struct FileHashes {
+    pub fast: u128,
+    pub sha256: String,
 }
 
 struct CachedFile {
@@ -57,6 +65,7 @@ impl<'a> ScanCache<'a> {
         self.stats.mode = reuse.map_or(crate::reuse_cache::CacheMode::Off, |cache| cache.mode);
     }
 
+    #[cfg(test)]
     pub fn scan(&mut self, path: &Path, max_scan_size: u64) -> Result<Vec<RuleScore>> {
         let size = path.metadata()?.len();
         ensure!(
@@ -64,7 +73,35 @@ impl<'a> ScanCache<'a> {
             "file {} is {size} bytes, exceeding the {max_scan_size}-byte scan limit",
             path.display()
         );
-        let identity = (hash_file(path)?, size);
+        self.scan_hashed(path, size, &hash_file(path)?)
+    }
+
+    pub(crate) fn prefetch(&mut self, files: &[(PathBuf, u64, FileHashes)]) {
+        if let Some(reuse) = self.reuse.filter(|cache| cache.uses_database()) {
+            let keys = files
+                .iter()
+                .filter(|(_, size, hash)| !self.files.contains_key(&(hash.fast, *size)))
+                .map(|(_, _, hash)| {
+                    (
+                        format!("sha256:{}", hash.sha256),
+                        crate::durable_cache::Key {
+                            file_digest: hash.sha256.clone(),
+                            language: String::new(),
+                        },
+                    )
+                })
+                .collect::<Vec<_>>();
+            reuse.prefetch(&keys, &mut self.stats);
+        }
+    }
+
+    pub(crate) fn scan_hashed(
+        &mut self,
+        path: &Path,
+        size: u64,
+        hashes: &FileHashes,
+    ) -> Result<Vec<RuleScore>> {
+        let identity = (hashes.fast, size);
         if let Some(cached) = self.files.get(&identity) {
             // A hash collision must never suppress a scan of different bytes.
             if files_equal(path, &cached.path, size)? {
@@ -73,7 +110,14 @@ impl<'a> ScanCache<'a> {
             }
         }
 
-        let key = format!("{:032x}:{}", identity.0, size);
+        let key = if self
+            .reuse
+            .is_some_and(crate::reuse_cache::ReuseCache::uses_database)
+        {
+            format!("sha256:{}", hashes.sha256)
+        } else {
+            format!("{:032x}:{}", identity.0, size)
+        };
         let cached = self
             .reuse
             .and_then(|cache| cache.lookup::<Vec<ContentMatch>>(&key, path, &mut self.stats));
@@ -171,16 +215,21 @@ fn matches_for_path(matches: &[ContentMatch], path: &Path) -> Vec<RuleScore> {
         .collect()
 }
 
-fn hash_file(path: &Path) -> Result<u128> {
+pub(crate) fn hash_file(path: &Path) -> Result<FileHashes> {
     let mut file = File::open(path)?;
     let mut hasher = Xxh3::new();
+    let mut sha256 = Sha256::new();
     let mut buffer = [0_u8; 8192];
     loop {
         let read = file.read(&mut buffer)?;
         if read == 0 {
-            return Ok(hasher.digest128());
+            return Ok(FileHashes {
+                fast: hasher.digest128(),
+                sha256: format!("{:x}", sha256.finalize()),
+            });
         }
         hasher.update(&buffer[..read]);
+        sha256.update(&buffer[..read]);
     }
 }
 
@@ -238,7 +287,7 @@ mod tests {
         let shared = ReuseCache::new(CacheMode::Reuse, 10, 1024);
         let mut setup = CacheStats::new("yara", CacheMode::Reuse);
         shared.insert(
-            format!("{:032x}:6", hash_file(&path).unwrap()),
+            format!("{:032x}:6", hash_file(&path).unwrap().fast),
             &path,
             &Vec::<super::ContentMatch>::new(),
             &mut setup,
@@ -358,11 +407,11 @@ mod tests {
         assert!(cache.scan(&clean, 1024).unwrap().is_empty());
         let cached = cache
             .files
-            .remove(&(hash_file(&clean).unwrap(), 6))
+            .remove(&(hash_file(&clean).unwrap().fast, 6))
             .unwrap();
         cache
             .files
-            .insert((hash_file(&malicious).unwrap(), 6), cached);
+            .insert((hash_file(&malicious).unwrap().fast, 6), cached);
         assert_eq!(cache.scan(&malicious, 1024).unwrap().len(), 1);
         assert_eq!((cache.scanned_files, cache.reused_files), (2, 0));
     }

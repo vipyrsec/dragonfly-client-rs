@@ -51,13 +51,30 @@ impl Distribution {
         max_scan_size: u64,
     ) -> Result<DistributionScanResults> {
         let mut results = DistributionScanResults::empty(self.inspector_url.clone());
-        for entry in WalkDir::new(self.dir.path()).follow_links(false) {
-            let entry = entry?;
-            if !entry.file_type().is_file() {
-                continue;
+        let paths = WalkDir::new(self.dir.path())
+            .follow_links(false)
+            .into_iter()
+            .filter_map(|entry| match entry {
+                Ok(entry) if entry.file_type().is_file() => Some(Ok(entry.into_path())),
+                Ok(_) => None,
+                Err(error) => Some(Err(error)),
+            })
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        for chunk in paths.chunks(crate::durable_cache::BATCH_SIZE) {
+            let mut files = Vec::with_capacity(chunk.len());
+            for path in chunk {
+                let size = path.metadata()?.len();
+                ensure!(size <= max_scan_size, "file exceeds scan size limit");
+                files.push((path.clone(), size, crate::scan_cache::hash_file(path)?));
             }
-            let file_scan_result = self.scan_file(entry.path(), cache, max_scan_size)?;
-            results.record(file_scan_result);
+            cache.prefetch(&files);
+            for (path, size, hashes) in files {
+                let rules = cache.scan_hashed(&path, size, &hashes)?;
+                results.record(FileScanResult::new(
+                    self.relative_to_archive_root(&path)?,
+                    rules,
+                ));
+            }
         }
 
         Ok(results)
@@ -68,6 +85,7 @@ impl Distribution {
     /// # Arguments
     /// * `path` - The path of the file to scan.
     /// * `cache` - The package's content scan cache and compiled rules
+    #[cfg(test)]
     fn scan_file(
         &self,
         path: &Path,
@@ -284,6 +302,9 @@ pub fn scan_all_distributions(
             "Cross-package cache validation failed; reuse disabled and this job's cached results discarded");
         Ok(distribution_scan_results)
     })();
+    if let Some(reuse) = reuse {
+        reuse.flush(&mut cache.stats);
+    }
     *stats = cache.stats.clone();
     result
 }

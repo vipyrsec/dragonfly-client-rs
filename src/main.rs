@@ -1,5 +1,6 @@
 mod app_config;
 mod client;
+mod durable_cache;
 mod exts;
 mod reuse_cache;
 mod scan_cache;
@@ -87,6 +88,7 @@ fn run_job(client: &DragonflyClient, job: &Job) {
     let _enter = span.enter();
     let started_at = Instant::now();
 
+    client.reuse_cache.begin_job(job);
     let mut stats = crate::reuse_cache::CacheStats::new("yara", client.reuse_cache.mode);
     let Some(scan_result) = scan_package(client, job, &mut stats) else {
         return;
@@ -161,6 +163,10 @@ fn main() -> Result<()> {
 
     tracing_subscriber::fmt().with_env_filter(env_filter).init();
     let mut client = DragonflyClient::new()?;
+    ensure!(
+        !APP_CONFIG.reuse_cache_database || APP_CONFIG.threads == 1,
+        "Database cache requires one scan thread"
+    );
     ensure!(APP_CONFIG.reuse_cache_mode != crate::reuse_cache::CacheMode::Reuse || APP_CONFIG.threads == 1,
         "Cross-package reuse requires DRAGONFLY_THREADS=1 so validation can invalidate the entire active job");
     ensure!(
