@@ -64,7 +64,11 @@ impl Distribution {
             let mut files = Vec::with_capacity(chunk.len());
             for path in chunk {
                 let size = path.metadata()?.len();
-                ensure!(size <= max_scan_size, "file exceeds scan size limit");
+                ensure!(
+                    size <= max_scan_size,
+                    "file {} is {size} bytes, exceeding the {max_scan_size}-byte scan size limit",
+                    path.display()
+                );
                 files.push((path.clone(), size, crate::scan_cache::hash_file(path)?));
             }
             cache.prefetch(&files);

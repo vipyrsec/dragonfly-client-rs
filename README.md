@@ -221,8 +221,10 @@ the scanner/engine executable fingerprint, and OpenGrep's language extension.
 SHA-256 is calculated alongside XXH3 during the existing input hashing pass.
 No file contents are uploaded. Rules/engine changes miss the cache; unchanged
 workers can reuse database results after a restart. Findings are remapped to the
-current package and paths. Failed/incomplete scans retain the existing safety
-checks and do not become durable clean results.
+current package and paths. Only successful, complete file scans are cached.
+A later failure in another file or distribution does not invalidate those
+completed file results; the failed package still follows normal retry handling.
+Failed file scans never produce durable clean entries.
 
 Lookups/writes use batches of at most 128 files. Results are limited to 16 KiB/file
 and 512 KiB/write; temporary read results are capped at 16 MiB/job. A transport

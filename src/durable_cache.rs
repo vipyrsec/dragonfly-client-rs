@@ -169,10 +169,11 @@ impl DurableCache {
                 self.keys.insert(local.clone(), key.clone());
             }
             for value in reply.entries {
-                ensure!(
-                    value.result.len() <= MAX_RESULT_BYTES,
-                    "Cache result exceeds limit"
-                );
+                if value.result.len() > MAX_RESULT_BYTES {
+                    self.unavailable = true;
+                    self.hits.clear();
+                    color_eyre::eyre::bail!("Cache result exceeds limit");
+                }
                 if self.read_bytes + value.result.len() > MAX_READ_BYTES {
                     continue;
                 }
@@ -206,14 +207,26 @@ impl DurableCache {
         if result.len() > MAX_RESULT_BYTES {
             return Ok(());
         }
-        if self.pending.len() >= BATCH_SIZE || self.pending_bytes + result.len() > MAX_BATCH_BYTES {
+        let value = Value { key, result };
+        let encoded_bytes = serde_json::to_vec(&value)?.len();
+        let envelope_bytes = serde_json::to_vec(&serde_json::json!({
+            "context": self.context, "lease": self.lease, "entries": [], "revoke": false
+        }))?
+        .len();
+        if self.pending.len() >= BATCH_SIZE
+            || envelope_bytes + self.pending_bytes + encoded_bytes + self.pending.len()
+                > MAX_BATCH_BYTES
+        {
             self.flush()?;
         }
         if !self.available() {
             return Ok(());
         }
-        self.pending_bytes += result.len();
-        self.pending.push(Value { key, result });
+        if envelope_bytes + encoded_bytes > MAX_BATCH_BYTES {
+            return Ok(());
+        }
+        self.pending_bytes += encoded_bytes;
+        self.pending.push(value);
         Ok(())
     }
 
@@ -387,6 +400,58 @@ mod tests {
         assert!(cache.lookup::<Vec<u8>>("local").unwrap().is_none());
         server.join().unwrap();
         assert_eq!(rx.try_iter().count(), 1);
+    }
+
+    #[test]
+    fn oversized_response_disables_previously_loaded_hits() {
+        let (_, key) = key();
+        let hit = serde_json::json!({"revoked":false,"entries":[
+            {"file_digest":key.file_digest,"language":"py","result":"[]"}
+        ]})
+        .to_string();
+        let bad = serde_json::json!({"revoked":false,"entries":[
+            {"file_digest":key.file_digest,"language":"py","result":"x".repeat(MAX_RESULT_BYTES + 1)}
+        ]}).to_string();
+        let (url, rx, server) = server(vec![(200, hit), (200, bad)]);
+        let mut cache = client(&url);
+        cache.prefetch(&[self::key()]).unwrap();
+        assert!(cache.lookup::<Vec<u8>>("local").unwrap().is_some());
+        assert!(cache.prefetch(&[self::key()]).is_err());
+        assert!(cache.lookup::<Vec<u8>>("local").unwrap().is_none());
+        cache.prefetch(&[self::key()]).unwrap();
+        server.join().unwrap();
+        assert_eq!(rx.try_iter().count(), 2);
+    }
+
+    #[test]
+    fn writes_bound_the_entire_encoded_request() {
+        let (url, rx, server) = server(vec![(200, "{}".into()), (200, "{}".into())]);
+        let mut cache = client(&url);
+        for n in 0..32 {
+            let local = n.to_string();
+            cache.keys.insert(
+                local.clone(),
+                Key {
+                    file_digest: format!("{n:064x}"),
+                    language: "py".into(),
+                },
+            );
+            cache.insert(&local, &vec!["\"".repeat(7_000)]).unwrap();
+        }
+        cache.flush().unwrap();
+        server.join().unwrap();
+        let requests = rx.try_iter().collect::<Vec<_>>();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(
+            requests
+                .iter()
+                .map(|v| v["entries"].as_array().unwrap().len())
+                .sum::<usize>(),
+            32
+        );
+        for request in requests {
+            assert!(serde_json::to_vec(&request).unwrap().len() <= MAX_BATCH_BYTES);
+        }
     }
 
     #[test]
