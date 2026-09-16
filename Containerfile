@@ -36,7 +36,7 @@ set -eu
 
 apt-get -q update
 apt-get -qy --no-install-recommends install \
-  'curl=8.14.1-2+deb13u4' \
+  'curl=8.14.1-2+deb13u5' \
   'libclang-dev=1:19.0-63'
 rm -rf /var/lib/apt/lists/*
 EOT
