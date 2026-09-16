@@ -84,15 +84,28 @@ impl<'a> ScanCache<'a> {
             && !self.files.contains_key(&identity)
         {
             let destination = self.directory.path().join(self.files.len().to_string());
-            fs::copy(path, &destination)?;
-            self.remaining_bytes -= size;
-            self.files.insert(
-                identity,
-                CachedFile {
-                    path: destination,
-                    matches,
-                },
-            );
+            match fs::copy(path, &destination) {
+                Ok(_) => {
+                    self.remaining_bytes -= size;
+                    self.files.insert(
+                        identity,
+                        CachedFile {
+                            path: destination,
+                            matches,
+                        },
+                    );
+                }
+                Err(error) => {
+                    // The package result is already valid. Stop new writes; any
+                    // partial representative is removed with the temporary directory.
+                    self.max_entries = 0;
+                    tracing::warn!(
+                        event = "content_scan_cache_write_failed",
+                        %error,
+                        "Disabling new cache entries; continuing with successful YARA results"
+                    );
+                }
+            }
         }
         Ok(result)
     }
@@ -208,6 +221,21 @@ mod tests {
             assert_eq!((cache.scanned_files, cache.reused_files), (3, 1));
             assert_eq!(cache.files.len(), 1);
         }
+    }
+
+    #[test]
+    fn cache_write_failure_preserves_successful_results_and_stops_new_writes() {
+        let rules = rules();
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("module.py");
+        fs::write(&path, b"danger").unwrap();
+        let mut cache = ScanCache::new(&rules, 10, 1024).unwrap();
+        fs::remove_dir(cache.directory.path()).unwrap();
+        assert_eq!(cache.scan(&path, 1024).unwrap().len(), 1);
+        assert_eq!(cache.scan(&path, 1024).unwrap().len(), 1);
+        assert_eq!((cache.scanned_files, cache.reused_files), (2, 0));
+        assert_eq!(cache.max_entries, 0);
+        assert!(cache.files.is_empty());
     }
 
     #[test]

@@ -98,7 +98,8 @@ The cache is discarded after each package and holds at most
 `DRAGONFLY_MAX_ARCHIVE_ENTRIES` representatives and
 `DRAGONFLY_MAX_EXPANDED_SIZE` bytes on temporary disk (4096 files and 64 MiB by
 default), in addition to the current extracted distribution. Once full, new
-contents are scanned normally. Failed scans are never cached. The
+contents are scanned normally. Cache write errors log a warning and disable new
+entries without discarding successful scan results. Failed scans are never cached. The
 `content_scan_cache` log event reports `scanned_files` and `reused_files` for
 completed packages.
 
