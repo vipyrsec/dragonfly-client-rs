@@ -1,6 +1,7 @@
 mod app_config;
 mod client;
 mod exts;
+mod reuse_cache;
 mod scan_cache;
 mod scanner;
 mod utils;
@@ -18,7 +19,11 @@ use crate::{
     scanner::{scan_all_distributions, PackageScanResults},
 };
 
-fn scan_package(client: &DragonflyClient, job: &Job) -> Option<ScanResult> {
+fn scan_package(
+    client: &DragonflyClient,
+    job: &Job,
+    stats: &mut crate::reuse_cache::CacheStats,
+) -> Option<ScanResult> {
     if job.hash != client.rules_state.hash {
         warn!(
             event = "scan_deferred",
@@ -38,29 +43,34 @@ fn scan_package(client: &DragonflyClient, job: &Job) -> Option<ScanResult> {
         "Started package scan"
     );
 
-    let result =
-        match scan_all_distributions(client.download_client(), &client.rules_state.rules, job) {
-            Ok(results) => {
-                let package_scan_results = PackageScanResults::new(
-                    job.name.clone(),
-                    job.version.clone(),
-                    job.attempt,
-                    job.assignment_id.clone(),
-                    results,
-                    job.hash.clone(),
-                );
-                let body = package_scan_results.build_body();
+    let result = match scan_all_distributions(
+        client.download_client(),
+        &client.rules_state.rules,
+        job,
+        Some(&client.reuse_cache),
+        stats,
+    ) {
+        Ok(results) => {
+            let package_scan_results = PackageScanResults::new(
+                job.name.clone(),
+                job.version.clone(),
+                job.attempt,
+                job.assignment_id.clone(),
+                results,
+                job.hash.clone(),
+            );
+            let body = package_scan_results.build_body();
 
-                Ok(body)
-            }
-            Err(err) => Err(SubmitJobResultsError {
-                name: job.name.clone(),
-                version: job.version.clone(),
-                attempt: job.attempt,
-                assignment_id: job.assignment_id.clone(),
-                reason: format!("{err}"),
-            }),
-        };
+            Ok(body)
+        }
+        Err(err) => Err(SubmitJobResultsError {
+            name: job.name.clone(),
+            version: job.version.clone(),
+            attempt: job.attempt,
+            assignment_id: job.assignment_id.clone(),
+            reason: format!("{err}"),
+        }),
+    };
     Some(result)
 }
 
@@ -72,14 +82,17 @@ fn run_job(client: &DragonflyClient, job: &Job) {
         version = %job.version,
         attempt = job.attempt,
         assignment_id = %job.assignment_id,
+        rules_commit = %job.hash,
     );
     let _enter = span.enter();
     let started_at = Instant::now();
 
-    let Some(scan_result) = scan_package(client, job) else {
+    let mut stats = crate::reuse_cache::CacheStats::new("yara", client.reuse_cache.mode);
+    let Some(scan_result) = scan_package(client, job, &mut stats) else {
         return;
     };
 
+    stats.emit();
     let outcome = match &scan_result {
         Ok(result) => {
             info!(
@@ -104,7 +117,7 @@ fn run_job(client: &DragonflyClient, job: &Job) {
         }
     };
 
-    match client.send_result(scan_result) {
+    match client.send_result(scan_result, &stats) {
         Ok(()) => info!(
             event = "result_submitted",
             elapsed_ms = started_at.elapsed().as_millis(),
@@ -148,6 +161,8 @@ fn main() -> Result<()> {
 
     tracing_subscriber::fmt().with_env_filter(env_filter).init();
     let mut client = DragonflyClient::new()?;
+    ensure!(APP_CONFIG.reuse_cache_mode != crate::reuse_cache::CacheMode::Reuse || APP_CONFIG.threads == 1,
+        "Cross-package reuse requires DRAGONFLY_THREADS=1 so validation can invalidate the entire active job");
     ensure!(
         APP_CONFIG.threads > 0,
         "DRAGONFLY_THREADS must be greater than zero"

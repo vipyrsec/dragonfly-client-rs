@@ -51,6 +51,7 @@ pub struct DragonflyClient {
     api_client: Client,
     download_client: Client,
     pub rules_state: RulesState,
+    pub reuse_cache: crate::reuse_cache::ReuseCache,
     base_url: String,
 }
 
@@ -73,6 +74,11 @@ impl DragonflyClient {
             api_client,
             download_client,
             rules_state,
+            reuse_cache: crate::reuse_cache::ReuseCache::new(
+                APP_CONFIG.reuse_cache_mode,
+                APP_CONFIG.reuse_cache_entries,
+                APP_CONFIG.reuse_cache_bytes,
+            ),
             base_url: APP_CONFIG.base_url.clone(),
         })
     }
@@ -81,6 +87,7 @@ impl DragonflyClient {
     pub fn update_rules(&mut self) -> Result<()> {
         let response = fetch_rules(&self.api_client, &self.base_url)?;
         self.rules_state.rules = response.compile()?;
+        self.reuse_cache.clear();
         self.rules_state.hash = response.hash;
 
         Ok(())
@@ -91,8 +98,12 @@ impl DragonflyClient {
     }
 
     /// Send a [`crate::client::models::ScanResult`] to mainframe
-    pub fn send_result(&self, body: models::ScanResult) -> reqwest::Result<()> {
-        send_result(&self.api_client, &self.base_url, body)
+    pub fn send_result(
+        &self,
+        body: models::ScanResult,
+        stats: &crate::reuse_cache::CacheStats,
+    ) -> reqwest::Result<()> {
+        send_result_with_metrics(&self.api_client, &self.base_url, body, Some(stats))
     }
 
     /// Return the client used for uncredentialed distribution downloads.
@@ -385,6 +396,11 @@ mod tests {
                 rules,
                 hash: String::new(),
             },
+            reuse_cache: crate::reuse_cache::ReuseCache::new(
+                crate::reuse_cache::CacheMode::Off,
+                0,
+                0,
+            ),
             base_url: String::from("https://dragonfly.example"),
         };
 
