@@ -192,7 +192,7 @@ warning-free runs. Its timeout fallback groups do not populate this cache.
 
 `observe` rescans every candidate and compares results. `reuse` rescans every
 hundredth hit; a mismatch disables the cache until a rules reload or restart
-and rejects the active job rather than publishing a mix of suspect cached results.
+and rejects jobs that consumed cached output. Fully fresh observation results are preserved.
 Reuse mode requires `DRAGONFLY_THREADS=1` to make this invalidation atomic across
 the active job. Replica-level parallelism still uses independent caches.
 Cache I/O/decoding failures fall back to scanning. Scan failures are not cached.

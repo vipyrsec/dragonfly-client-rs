@@ -280,7 +280,7 @@ pub fn scan_all_distributions(
             reused_files = cache.reused_files,
             "Finished package content scans"
         );
-        ensure!(cache.stats.mismatched_files == 0 && !(cache.stats.reused_files > 0 && reuse.is_some_and(crate::reuse_cache::ReuseCache::is_disabled)),
+        ensure!(!(cache.stats.reused_files > 0 && reuse.is_some_and(crate::reuse_cache::ReuseCache::is_disabled)),
             "Cross-package cache validation failed; reuse disabled and this job's cached results discarded");
         Ok(distribution_scan_results)
     })();
