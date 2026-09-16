@@ -9,7 +9,7 @@ use yara::Rules;
 
 use crate::{
     client::{download_distribution, Job, SubmitJobResultsSuccess},
-    exts::RuleExt,
+    scan_cache::ScanCache,
     utils::create_inspector_url,
     APP_CONFIG,
 };
@@ -45,13 +45,18 @@ struct Distribution {
 }
 
 impl Distribution {
-    fn scan(&mut self, rules: &Rules, max_scan_size: u64) -> Result<DistributionScanResults> {
+    fn scan(
+        &mut self,
+        cache: &mut ScanCache<'_>,
+        max_scan_size: u64,
+    ) -> Result<DistributionScanResults> {
         let mut results = DistributionScanResults::empty(self.inspector_url.clone());
-        for entry in WalkDir::new(self.dir.path())
-            .into_iter()
-            .filter_map(|dirent| dirent.into_iter().find(|de| de.file_type().is_file()))
-        {
-            let file_scan_result = self.scan_file(entry.path(), rules, max_scan_size)?;
+        for entry in WalkDir::new(self.dir.path()).follow_links(false) {
+            let entry = entry?;
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            let file_scan_result = self.scan_file(entry.path(), cache, max_scan_size)?;
             results.record(file_scan_result);
         }
 
@@ -62,26 +67,14 @@ impl Distribution {
     ///
     /// # Arguments
     /// * `path` - The path of the file to scan.
-    /// * `rules` - The compiled rule set to scan this file against
-    fn scan_file(&self, path: &Path, rules: &Rules, max_scan_size: u64) -> Result<FileScanResult> {
-        let file_size = path.metadata()?.len();
-        ensure!(
-            file_size <= max_scan_size,
-            "file {} is {file_size} bytes, exceeding the {max_scan_size}-byte scan limit",
-            path.display()
-        );
-        let rules = rules
-            .scan_file(path, 10)?
-            .into_iter()
-            .filter(|rule| {
-                let filetypes = rule.get_filetypes();
-                filetypes.is_empty()
-                    || filetypes
-                        .iter()
-                        .any(|filetype| path.to_string_lossy().ends_with(filetype))
-            })
-            .map(RuleScore::from)
-            .collect();
+    /// * `cache` - The package's content scan cache and compiled rules
+    fn scan_file(
+        &self,
+        path: &Path,
+        cache: &mut ScanCache<'_>,
+        max_scan_size: u64,
+    ) -> Result<FileScanResult> {
+        let rules = cache.scan(path, max_scan_size)?;
 
         Ok(FileScanResult::new(
             self.relative_to_archive_root(path)?,
@@ -261,6 +254,11 @@ pub fn scan_all_distributions(
         APP_CONFIG.max_distributions
     );
     let mut distribution_scan_results = Vec::with_capacity(job.distributions.len());
+    let mut cache = ScanCache::new(
+        rules,
+        APP_CONFIG.max_archive_entries,
+        APP_CONFIG.max_expanded_size,
+    )?;
     for distribution in &job.distributions {
         let download_url: Url = distribution.parse()?;
         let inspector_url = create_inspector_url(&job.name, &job.version, &download_url);
@@ -268,10 +266,16 @@ pub fn scan_all_distributions(
         let dir = download_distribution(http_client, download_url.clone())?;
 
         let mut dist = Distribution { dir, inspector_url };
-        let distribution_scan_result = dist.scan(rules, APP_CONFIG.max_scan_size)?;
+        let distribution_scan_result = dist.scan(&mut cache, APP_CONFIG.max_scan_size)?;
         distribution_scan_results.push(distribution_scan_result);
     }
 
+    tracing::info!(
+        event = "content_scan_cache",
+        scanned_files = cache.scanned_files,
+        reused_files = cache.reused_files,
+        "Finished package content scans"
+    );
     Ok(distribution_scan_results)
 }
 
@@ -670,6 +674,46 @@ mod tests {
     }
 
     #[test]
+    fn reuse_across_removed_distributions_preserves_scores_and_inspector_paths() {
+        let rules = Compiler::new()
+            .unwrap()
+            .add_rules_str(
+                r#"rule danger {
+                    meta: filetype = ".py" weight = 7
+                    strings: $a = "danger"
+                    condition: $a
+                }"#,
+            )
+            .unwrap()
+            .compile_rules()
+            .unwrap();
+        let mut cache = crate::scan_cache::ScanCache::new(&rules, 10, 1024).unwrap();
+        for archive in ["wheel", "sdist"] {
+            let directory = tempdir().unwrap();
+            std::fs::write(directory.path().join("module.py"), b"danger").unwrap();
+            std::fs::write(directory.path().join("copy.txt"), b"danger").unwrap();
+            let mut distribution = super::Distribution {
+                dir: directory,
+                inspector_url: format!("https://example.com/{archive}/").parse().unwrap(),
+            };
+            let result = distribution.scan(&mut cache, 1024).unwrap();
+            assert_eq!(result.get_total_score(), 7);
+            assert_eq!(result.get_matched_rule_identifiers(), vec!["danger"]);
+            assert_eq!(
+                result.inspector_url(),
+                Some(format!("https://example.com/{archive}/module.py"))
+            );
+            // Dropping the extracted archive must not invalidate cached content.
+        }
+        assert_eq!((cache.scanned_files, cache.reused_files), (1, 3));
+        let fresh_cache = crate::scan_cache::ScanCache::new(&rules, 10, 1024).unwrap();
+        assert_eq!(
+            (fresh_cache.scanned_files, fresh_cache.reused_files),
+            (0, 0)
+        );
+    }
+
+    #[test]
     fn test_scan_file() {
         let rules = r#"
             rule contains_rust {
@@ -698,7 +742,8 @@ mod tests {
             inspector_url: "https://example.com".parse().unwrap(),
         };
 
-        let result = distro.scan_file(tmpfile.path(), &rules, 1024).unwrap();
+        let mut cache = crate::scan_cache::ScanCache::new(&rules, 10, 1024).unwrap();
+        let result = distro.scan_file(tmpfile.path(), &mut cache, 1024).unwrap();
 
         assert_eq!(
             result.rules[0],
@@ -726,7 +771,8 @@ mod tests {
             inspector_url: "https://example.com".parse().unwrap(),
         };
 
-        let error = distro.scan_file(tmpfile.path(), &rules, 4).unwrap_err();
+        let mut cache = crate::scan_cache::ScanCache::new(&rules, 10, 1024).unwrap();
+        let error = distro.scan_file(tmpfile.path(), &mut cache, 4).unwrap_err();
 
         assert!(error.to_string().contains("4-byte scan limit"));
     }
@@ -774,7 +820,8 @@ mod tests {
             inspector_url: "https://example.com".parse().unwrap(),
         };
 
-        let results = distro.scan(&rules, 1024).unwrap();
+        let mut cache = crate::scan_cache::ScanCache::new(&rules, 10, 1024).unwrap();
+        let results = distro.scan(&mut cache, 1024).unwrap();
 
         assert_eq!(results.get_most_malicious_file().unwrap().rules.len(), 1);
     }

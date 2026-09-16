@@ -88,6 +88,21 @@ a 512 MiB background-worker container while preserving substantial headroom
 for compiled YARA rules, ZIP metadata, allocator overhead, and filesystem
 cache.
 
+Within one package, identical file contents reuse successful YARA matches across
+distributions. Streaming XXH3-128 hashes and file sizes identify candidates;
+byte-for-byte comparison confirms equality before reuse. Rule `filetype` metadata
+is applied to each original path, preserving distribution scores and inspector
+links even when identical files have different names or extensions.
+
+The cache is discarded after each package and holds at most
+`DRAGONFLY_MAX_ARCHIVE_ENTRIES` representatives and
+`DRAGONFLY_MAX_EXPANDED_SIZE` bytes on temporary disk (4096 files and 64 MiB by
+default), in addition to the current extracted distribution. Once full, new
+contents are scanned normally. Cache write errors log a warning and disable new
+entries without discarding successful scan results. Failed scans are never cached. The
+`content_scan_cache` log event reports `scanned_files` and `reused_files` for
+completed packages.
+
 ### How it works: Detailed Breakdown
 
 This section attempts to describe in detail how the client works under the

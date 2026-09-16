@@ -1,6 +1,7 @@
 mod app_config;
 mod client;
 mod exts;
+mod scan_cache;
 mod scanner;
 mod utils;
 
