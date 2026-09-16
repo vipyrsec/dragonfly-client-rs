@@ -10,6 +10,7 @@ const MEBIBYTE: u64 = 1024 * 1024;
 
 #[derive(Serialize, Deserialize)]
 pub struct AppConfig {
+    pub reuse_cache_database: bool,
     pub reuse_cache_mode: crate::reuse_cache::CacheMode,
     pub reuse_cache_entries: usize,
     pub reuse_cache_bytes: usize,
@@ -32,6 +33,7 @@ impl Default for AppConfig {
 
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         AppConfig {
+            reuse_cache_database: false,
             reuse_cache_mode: crate::reuse_cache::CacheMode::Off,
             reuse_cache_entries: 4096,
             reuse_cache_bytes: 32 * 1024 * 1024,

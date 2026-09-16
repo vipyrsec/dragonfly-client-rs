@@ -208,3 +208,36 @@ downloads. Timings are wall time, not CPU billing or a claimed counterfactual.
 Disable with `DRAGONFLY_REUSE_CACHE_MODE=off` and redeploy, or restore the previous
 image. Existing package results and schema are unchanged. Only staging should
 enable this experiment until its observation and reuse windows are reviewed.
+
+### Durable cache (staging experiment)
+
+Set `DRAGONFLY_REUSE_CACHE_DATABASE=true` with reuse/observe mode to use
+Mainframe's optional `/scan-cache` API instead of process-local cross-job storage.
+This requires one scan thread and a Mainframe deployment with the reversible
+cache migration and `SCAN_CACHE_ENABLED=true`. Both flags default to disabled.
+
+The key combines SHA-256 of file content, the actual rules corpus and its commit,
+the scanner/engine executable fingerprint, and OpenGrep's language extension.
+SHA-256 is calculated alongside XXH3 during the existing input hashing pass.
+No file contents are uploaded. Rules/engine changes miss the cache; unchanged
+workers can reuse database results after a restart. Findings are remapped to the
+current package and paths. Only successful, complete file scans are cached.
+A later failure in another file or distribution does not invalidate those
+completed file results; the failed package still follows normal retry handling.
+Failed file scans never produce durable clean entries.
+
+Lookups/writes use batches of at most 128 files. Results are limited to 16 KiB/file
+and 512 KiB/write; temporary read results are capped at 16 MiB/job. A transport
+failure stops further cache calls for that job. Requests time out after 750 ms;
+new requests stop after two seconds of accumulated cache network time per job.
+Unavailable cache entries are scanned normally. Sampled mismatches request
+persistent namespace revocation and discard jobs that consumed cached output.
+Revocation failures are logged explicitly.
+
+The server enforces separate connection, rate, storage and expiry budgets.
+Database inserts are measured by `scanner_cache_rows_inserted_total`; the worker
+`inserted_files` counter remains specific to process-local storage. Existing
+reuse counters still measure actual avoided inputs. Hashing time is outside the
+cache-transport overhead counter; these counters do not establish CPU savings.
+Set `DRAGONFLY_REUSE_CACHE_MODE=off` to disable all cache requests. Setting only
+`DRAGONFLY_REUSE_CACHE_DATABASE=false` restores the original local cache mode.

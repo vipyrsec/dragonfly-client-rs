@@ -65,6 +65,21 @@ impl DragonflyClient {
 
         let rules_response = fetch_rules(&api_client, &APP_CONFIG.base_url)?;
 
+        let mut reuse_cache = crate::reuse_cache::ReuseCache::new(
+            APP_CONFIG.reuse_cache_mode,
+            APP_CONFIG.reuse_cache_entries,
+            APP_CONFIG.reuse_cache_bytes,
+        );
+        if APP_CONFIG.reuse_cache_database {
+            reuse_cache.set_database(crate::durable_cache::DurableCache::new(
+                api_client.clone(),
+                &APP_CONFIG.base_url,
+                "yara",
+                &rules_response.hash,
+                &rules_response.rules,
+                None,
+            )?);
+        }
         let rules_state = RulesState {
             rules: rules_response.compile()?,
             hash: rules_response.hash,
@@ -74,11 +89,7 @@ impl DragonflyClient {
             api_client,
             download_client,
             rules_state,
-            reuse_cache: crate::reuse_cache::ReuseCache::new(
-                APP_CONFIG.reuse_cache_mode,
-                APP_CONFIG.reuse_cache_entries,
-                APP_CONFIG.reuse_cache_bytes,
-            ),
+            reuse_cache,
             base_url: APP_CONFIG.base_url.clone(),
         })
     }
@@ -86,8 +97,20 @@ impl DragonflyClient {
     /// Update the global ruleset. Waits for a write lock.
     pub fn update_rules(&mut self) -> Result<()> {
         let response = fetch_rules(&self.api_client, &self.base_url)?;
-        self.rules_state.rules = response.compile()?;
+        let compiled_rules = response.compile()?;
+        if APP_CONFIG.reuse_cache_database {
+            self.reuse_cache
+                .set_database(crate::durable_cache::DurableCache::new(
+                    self.api_client.clone(),
+                    &self.base_url,
+                    "yara",
+                    &response.hash,
+                    &response.rules,
+                    None,
+                )?);
+        }
         self.reuse_cache.clear();
+        self.rules_state.rules = compiled_rules;
         self.rules_state.hash = response.hash;
 
         Ok(())
