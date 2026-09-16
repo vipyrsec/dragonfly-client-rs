@@ -23,18 +23,37 @@ pub fn fetch_rules(http_client: &Client, base_url: &str) -> reqwest::Result<mode
         .json()
 }
 
+#[cfg(test)]
 pub fn send_result(
     http_client: &Client,
     base_url: &str,
     body: models::ScanResult,
 ) -> reqwest::Result<()> {
-    let body: ScanResultSerializer = body.into();
+    send_result_with_metrics(http_client, base_url, body, None)
+}
+
+pub fn send_result_with_metrics(
+    http_client: &Client,
+    base_url: &str,
+    body: models::ScanResult,
+    stats: Option<&crate::reuse_cache::CacheStats>,
+) -> reqwest::Result<()> {
+    #[derive(serde::Serialize)]
+    struct Report<'a> {
+        #[serde(flatten)]
+        result: ScanResultSerializer,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        scan_reuse: Option<&'a crate::reuse_cache::CacheStats>,
+    }
+    let body = Report {
+        result: body.into(),
+        scan_reuse: stats,
+    };
     http_client
         .put(format!("{base_url}/package"))
         .json(&body)
         .send()?
         .error_for_status()?;
-
     Ok(())
 }
 

@@ -12,7 +12,7 @@ use yara::Rules;
 
 use crate::{exts::RuleExt, scanner::RuleScore};
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 struct ContentMatch {
     score: RuleScore,
     filetypes: Vec<String>,
@@ -27,6 +27,8 @@ struct CachedFile {
 /// Representative bytes live on bounded temporary storage, not in memory.
 pub struct ScanCache<'a> {
     rules: &'a Rules,
+    reuse: Option<&'a crate::reuse_cache::ReuseCache>,
+    pub stats: crate::reuse_cache::CacheStats,
     directory: TempDir,
     files: HashMap<(u128, u64), CachedFile>,
     max_entries: usize,
@@ -39,6 +41,8 @@ impl<'a> ScanCache<'a> {
     pub fn new(rules: &'a Rules, max_entries: usize, max_bytes: u64) -> Result<Self> {
         Ok(Self {
             rules,
+            reuse: None,
+            stats: crate::reuse_cache::CacheStats::new("yara", crate::reuse_cache::CacheMode::Off),
             directory: tempfile::tempdir()?,
             files: HashMap::new(),
             max_entries,
@@ -46,6 +50,11 @@ impl<'a> ScanCache<'a> {
             scanned_files: 0,
             reused_files: 0,
         })
+    }
+
+    pub fn set_reuse(&mut self, reuse: Option<&'a crate::reuse_cache::ReuseCache>) {
+        self.reuse = reuse;
+        self.stats.mode = reuse.map_or(crate::reuse_cache::CacheMode::Off, |cache| cache.mode);
     }
 
     pub fn scan(&mut self, path: &Path, max_scan_size: u64) -> Result<Vec<RuleScore>> {
@@ -64,20 +73,54 @@ impl<'a> ScanCache<'a> {
             }
         }
 
-        let matches: Vec<_> = self
-            .rules
-            .scan_file(path, 10)?
-            .into_iter()
-            .map(|rule| ContentMatch {
-                filetypes: rule
-                    .get_filetypes()
-                    .into_iter()
-                    .map(str::to_owned)
-                    .collect(),
-                score: RuleScore::from(rule),
-            })
-            .collect();
-        self.scanned_files += 1;
+        let key = format!("{:032x}:{}", identity.0, size);
+        let cached = self
+            .reuse
+            .and_then(|cache| cache.lookup::<Vec<ContentMatch>>(&key, path, &mut self.stats));
+        let reuse_enabled = cached.is_some()
+            && self
+                .reuse
+                .is_some_and(crate::reuse_cache::ReuseCache::should_reuse);
+        let matches = if let Some(matches) = cached.as_ref().filter(|_| reuse_enabled) {
+            self.stats.reused_files += 1;
+            self.stats.reused_bytes += size;
+            matches.clone()
+        } else {
+            let started = std::time::Instant::now();
+            self.stats.engine_files += 1;
+            self.stats.engine_bytes += size;
+            let scanned = self.rules.scan_file(path, 10);
+            self.stats.engine_us += started.elapsed().as_micros();
+            let matches: Vec<_> = scanned?
+                .into_iter()
+                .map(|rule| ContentMatch {
+                    filetypes: rule
+                        .get_filetypes()
+                        .into_iter()
+                        .map(str::to_owned)
+                        .collect(),
+                    score: RuleScore::from(rule),
+                })
+                .collect();
+            self.scanned_files += 1;
+            if let Some(previous) = cached {
+                self.stats.validated_files += 1;
+                if previous != matches {
+                    self.stats.mismatched_files += 1;
+                    if let Some(cache) = self.reuse {
+                        cache.disable();
+                    }
+                    tracing::error!(
+                        event = "scan_reuse_mismatch",
+                        "Cached YARA results differ from fresh scan"
+                    );
+                }
+            }
+            if let Some(cache) = self.reuse {
+                cache.insert(key, path, &matches, &mut self.stats);
+            }
+            matches
+        };
         let result = matches_for_path(&matches, path);
         if self.files.len() < self.max_entries
             && size <= self.remaining_bytes
@@ -180,6 +223,43 @@ mod tests {
             .unwrap()
             .compile_rules()
             .unwrap()
+    }
+
+    #[test]
+    fn cross_job_reuse_observation_and_rules_reset_preserve_results() {
+        use crate::reuse_cache::{CacheMode, ReuseCache};
+        let rules = rules();
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("first.py");
+        fs::write(&path, b"danger").unwrap();
+        for mode in [CacheMode::Off, CacheMode::Observe, CacheMode::Reuse] {
+            let mut shared = ReuseCache::new(mode, 10, 1024);
+            for iteration in 0..2 {
+                let mut job = ScanCache::new(&rules, 10, 1024).unwrap();
+                job.set_reuse(Some(&shared));
+                assert_eq!(job.scan(&path, 1024).unwrap()[0].name, "python");
+                assert_eq!(
+                    job.stats.reused_files,
+                    u64::from(iteration == 1 && mode == CacheMode::Reuse)
+                );
+                assert_eq!(
+                    job.stats.validated_files,
+                    u64::from(iteration == 1 && mode == CacheMode::Observe)
+                );
+                assert_eq!(job.stats.mismatched_files, 0);
+            }
+            shared.clear();
+            let changed = Compiler::new()
+                .unwrap()
+                .add_rules_str("rule changed { condition: true }")
+                .unwrap()
+                .compile_rules()
+                .unwrap();
+            let mut job = ScanCache::new(&changed, 10, 1024).unwrap();
+            job.set_reuse(Some(&shared));
+            assert_eq!(job.scan(&path, 1024).unwrap()[0].name, "changed");
+            assert_eq!(job.stats.reused_files, 0);
+        }
     }
 
     #[test]

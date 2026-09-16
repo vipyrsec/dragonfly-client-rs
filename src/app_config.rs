@@ -10,6 +10,9 @@ const MEBIBYTE: u64 = 1024 * 1024;
 
 #[derive(Serialize, Deserialize)]
 pub struct AppConfig {
+    pub reuse_cache_mode: crate::reuse_cache::CacheMode,
+    pub reuse_cache_entries: usize,
+    pub reuse_cache_bytes: usize,
     pub base_url: String,
     pub threads: usize,
     pub load_duration: u64,
@@ -29,6 +32,9 @@ impl Default for AppConfig {
 
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         AppConfig {
+            reuse_cache_mode: crate::reuse_cache::CacheMode::Off,
+            reuse_cache_entries: 4096,
+            reuse_cache_bytes: 32 * 1024 * 1024,
             base_url: String::from("https://dragonfly.vipyrsec.com"),
             cf_access_client_id: String::new(),
             cf_access_client_secret: String::new(),

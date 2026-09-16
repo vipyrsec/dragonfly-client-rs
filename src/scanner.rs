@@ -14,7 +14,7 @@ use crate::{
     APP_CONFIG,
 };
 
-#[derive(Debug, Hash, Eq, PartialEq, Clone)]
+#[derive(Debug, Hash, Eq, PartialEq, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RuleScore {
     pub name: String,
     pub score: i64,
@@ -246,6 +246,8 @@ pub fn scan_all_distributions(
     http_client: &Client,
     rules: &Rules,
     job: &Job,
+    reuse: Option<&crate::reuse_cache::ReuseCache>,
+    stats: &mut crate::reuse_cache::CacheStats,
 ) -> Result<Vec<DistributionScanResults>> {
     ensure!(
         job.distributions.len() <= APP_CONFIG.max_distributions,
@@ -259,24 +261,29 @@ pub fn scan_all_distributions(
         APP_CONFIG.max_archive_entries,
         APP_CONFIG.max_expanded_size,
     )?;
-    for distribution in &job.distributions {
-        let download_url: Url = distribution.parse()?;
-        let inspector_url = create_inspector_url(&job.name, &job.version, &download_url);
+    cache.set_reuse(reuse);
+    let result = (|| {
+        for distribution in &job.distributions {
+            let download_url: Url = distribution.parse()?;
+            let inspector_url = create_inspector_url(&job.name, &job.version, &download_url);
 
-        let dir = download_distribution(http_client, download_url.clone())?;
+            let dir = download_distribution(http_client, download_url.clone())?;
 
-        let mut dist = Distribution { dir, inspector_url };
-        let distribution_scan_result = dist.scan(&mut cache, APP_CONFIG.max_scan_size)?;
-        distribution_scan_results.push(distribution_scan_result);
-    }
+            let mut dist = Distribution { dir, inspector_url };
+            let distribution_scan_result = dist.scan(&mut cache, APP_CONFIG.max_scan_size)?;
+            distribution_scan_results.push(distribution_scan_result);
+        }
 
-    tracing::info!(
-        event = "content_scan_cache",
-        scanned_files = cache.scanned_files,
-        reused_files = cache.reused_files,
-        "Finished package content scans"
-    );
-    Ok(distribution_scan_results)
+        tracing::info!(
+            event = "content_scan_cache",
+            scanned_files = cache.scanned_files,
+            reused_files = cache.reused_files,
+            "Finished package content scans"
+        );
+        Ok(distribution_scan_results)
+    })();
+    *stats = cache.stats.clone();
+    result
 }
 
 #[cfg(test)]
@@ -430,8 +437,14 @@ mod tests {
             assignment_id: "d4d10b9b-f0ea-44dc-9d21-33c0ae9ed3c0".into(),
         };
 
-        let error = super::scan_all_distributions(&reqwest::blocking::Client::new(), &rules, &job)
-            .unwrap_err();
+        let error = super::scan_all_distributions(
+            &reqwest::blocking::Client::new(),
+            &rules,
+            &job,
+            None,
+            &mut crate::reuse_cache::CacheStats::new("yara", crate::reuse_cache::CacheMode::Off),
+        )
+        .unwrap_err();
 
         assert!(error.to_string().contains("distribution limit"));
     }
@@ -453,7 +466,13 @@ mod tests {
             assignment_id: "e6e7d9ea-8ba5-4597-b4b8-a2b07090ad2c".into(),
         };
 
-        let result = super::scan_all_distributions(&reqwest::blocking::Client::new(), &rules, &job);
+        let result = super::scan_all_distributions(
+            &reqwest::blocking::Client::new(),
+            &rules,
+            &job,
+            None,
+            &mut crate::reuse_cache::CacheStats::new("yara", crate::reuse_cache::CacheMode::Off),
+        );
 
         assert!(result.is_err());
     }

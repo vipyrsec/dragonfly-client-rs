@@ -165,3 +165,42 @@ they do
 | `DRAGONFLY_MAX_EXPANDED_SIZE`         | 67108864                         | Maximum total expanded distribution size in bytes                               |
 | `DRAGONFLY_MAX_SCAN_SIZE`             | 16777216                         | Maximum individual file size passed to YARA in bytes                            |
 <!-- markdownlint-enable MD013 -->
+
+## Experimental cross-package reuse
+
+Disabled by default. The staging experiment uses these settings:
+
+| Environment variable | Default | Meaning |
+| --- | --- | --- |
+| `DRAGONFLY_REUSE_CACHE_MODE` | `off` | `off`, `observe` (rescan hits), or `reuse` |
+| `DRAGONFLY_REUSE_CACHE_ENTRIES` | `4096` | Maximum entries per worker process |
+| `DRAGONFLY_REUSE_CACHE_BYTES` | `33554432` | Maximum retained content and encoded-result bytes |
+
+The disposable cache belongs to the loaded rules snapshot and engine process.
+Every successful rules reload clears it, including reloads with an unchanged
+commit identifier. Engine/image changes and restarts start cold. No database,
+network cache, migration, or new dependency is involved. FIFO eviction bounds
+retained bytes and entry metadata; lookups compare exact bytes after hashing.
+Replicas do not share entries. Existing within-package deduplication remains.
+
+Successful content results, including clean results, can be reused across
+package releases. Paths and Inspector locations are reconstructed for the
+current package. OpenGrep additionally keys by extension, bypasses content reuse
+for path-scoped rules, and only admits explicitly scanned targets from complete,
+warning-free runs. Its timeout fallback groups do not populate this cache.
+
+`observe` rescans every candidate and compares results. `reuse` rescans every
+hundredth hit; a mismatch disables the cache until a rules reload or restart.
+Cache I/O/decoding failures fall back to scanning. Scan failures are not cached.
+
+Each job emits `event="scan_reuse"` with scanner, mode, rules commit (in its job
+span), candidate/reused files, reused bytes, engine-target files/bytes, measured
+engine wall time and cache overhead (microseconds), insertions, FIFO evictions,
+errors, validation samples and mismatches. Counts exclude existing within-package
+reuse. Engine-target counts describe submitted targets, not individual rules or
+fallback retry attempts. Reused bytes measure avoided engine input, not avoided
+downloads. Timings are wall time, not CPU billing or a claimed counterfactual.
+
+Disable with `DRAGONFLY_REUSE_CACHE_MODE=off` and redeploy, or restore the previous
+image. Existing package results and schema are unchanged. Only staging should
+enable this experiment until its observation and reuse windows are reviewed.
