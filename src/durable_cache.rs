@@ -53,6 +53,11 @@ struct Reply {
     entries: Vec<Value>,
 }
 
+#[derive(Deserialize)]
+struct QuarantineResult {
+    quarantined: usize,
+}
+
 pub(crate) struct DurableCache {
     client: Client,
     url: String,
@@ -61,6 +66,7 @@ pub(crate) struct DurableCache {
     keys: HashMap<String, Key>,
     hits: HashMap<String, String>,
     pending: Vec<Value>,
+    quarantines: Vec<Key>,
     pending_bytes: usize,
     read_bytes: usize,
     spent: Duration,
@@ -96,6 +102,7 @@ impl DurableCache {
             keys: HashMap::new(),
             hits: HashMap::new(),
             pending: Vec::new(),
+            quarantines: Vec::new(),
             pending_bytes: 0,
             read_bytes: 0,
             spent: Duration::ZERO,
@@ -147,6 +154,7 @@ impl DurableCache {
     }
 
     pub fn prefetch(&mut self, keys: &[(String, Key)]) -> Result<()> {
+        self.flush_quarantines()?;
         if !self.available() {
             return Ok(());
         }
@@ -244,6 +252,47 @@ impl DurableCache {
         Ok(())
     }
 
+    pub fn quarantine(&mut self, local: &str) -> Result<()> {
+        let key = self
+            .keys
+            .get(local)
+            .cloned()
+            .ok_or_else(|| color_eyre::eyre::eyre!("Missing cache key for quarantine"))?;
+        self.hits.remove(local);
+        self.pending.retain(|value| value.key != key);
+        self.pending_bytes = self
+            .pending
+            .iter()
+            .map(|value| serde_json::to_vec(value).map(|bytes| bytes.len()))
+            .sum::<std::result::Result<usize, _>>()?;
+        if !self.quarantines.contains(&key) {
+            ensure!(
+                self.quarantines.len() < 4096,
+                "Pending quarantine capacity reached"
+            );
+            self.quarantines.push(key);
+        }
+        self.flush_quarantines()
+    }
+
+    fn flush_quarantines(&mut self) -> Result<()> {
+        while !self.quarantines.is_empty() && self.available() {
+            let count = self.quarantines.len().min(BATCH_SIZE);
+            let body = serde_json::json!({"context":self.context,"lease":self.lease,"entries":[],"quarantine":self.quarantines[..count]});
+            let reply: QuarantineResult = self.post("write", &body)?;
+            ensure!(
+                reply.quarantined <= count,
+                "Invalid quarantine acknowledgement"
+            );
+            // HTTP success commits the entire Mainframe transaction. This count is
+            // newly changed rows, not per-key acknowledgements: already quarantined
+            // or expired/absent entries contribute zero and require no retry.
+            self.quarantines.drain(..count);
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
     pub fn revoke(&mut self) -> Result<()> {
         self.revoked = true;
         self.hits.clear();
@@ -400,6 +449,73 @@ mod tests {
         assert!(cache.lookup::<Vec<u8>>("local").unwrap().is_none());
         server.join().unwrap();
         assert_eq!(rx.try_iter().count(), 1);
+    }
+
+    #[test]
+    fn quarantine_keeps_unrelated_writes_and_accepts_idempotent_zero_changes() {
+        let (url, rx, server) = server(vec![
+            (200, "{\"revoked\":false,\"entries\":[]}".into()),
+            (200, "{\"quarantined\":0}".into()),
+            (200, "{\"inserted\":1}".into()),
+        ]);
+        let mut cache = client(&url);
+        let good = (
+            "good".to_owned(),
+            Key {
+                file_digest: "b".repeat(64),
+                language: "py".into(),
+            },
+        );
+        cache.prefetch(&[key(), good]).unwrap();
+        cache.insert("local", &vec![1_u8]).unwrap();
+        cache.insert("good", &vec![7_u8]).unwrap();
+        cache.quarantine("local").unwrap();
+        assert!(cache.quarantines.is_empty());
+        assert!(!cache.revoked);
+        cache.flush().unwrap();
+        server.join().unwrap();
+        let bodies = rx.try_iter().collect::<Vec<_>>();
+        assert_eq!(bodies[2]["entries"].as_array().unwrap().len(), 1);
+        assert_eq!(bodies[2]["entries"][0]["file_digest"], "b".repeat(64));
+        assert_eq!(bodies[2]["entries"][0]["result"], "[7]");
+    }
+
+    #[test]
+    fn quarantine_retries_after_failure_without_revoking_namespace() {
+        let hit = serde_json::json!({"revoked":false,"entries":[
+            {"file_digest":"a".repeat(64),"language":"py","result":"[1]"}
+        ]})
+        .to_string();
+        let (url, rx, server) = server(vec![
+            (200, hit),
+            (503, "{}".into()),
+            (200, "{\"quarantined\":1}".into()),
+            (200, "{\"revoked\":false,\"entries\":[]}".into()),
+            (200, "{\"revoked\":false,\"entries\":[]}".into()),
+        ]);
+        let mut cache = client(&url);
+        cache.prefetch(&[key()]).unwrap();
+        assert!(cache.quarantine("local").is_err());
+        assert!(!cache.revoked);
+        assert!(cache.lookup::<Vec<u8>>("local").unwrap().is_none());
+        cache.begin_job(Lease {
+            name: "next".into(),
+            version: "1".into(),
+            assignment_id: "lease".into(),
+            attempt: 1,
+        });
+        cache.prefetch(&[key()]).unwrap();
+        assert!(cache.quarantines.is_empty());
+        assert!(cache.lookup::<Vec<u8>>("local").unwrap().is_none());
+        let mut restarted = client(&url);
+        restarted.prefetch(&[key()]).unwrap();
+        assert!(restarted.lookup::<Vec<u8>>("local").unwrap().is_none());
+        assert!(!restarted.revoked);
+        server.join().unwrap();
+        let bodies = rx.try_iter().collect::<Vec<_>>();
+        assert_eq!(bodies.len(), 5);
+        assert_eq!(bodies[1]["quarantine"], bodies[2]["quarantine"]);
+        assert!(bodies[1].get("revoke").is_none());
     }
 
     #[test]
