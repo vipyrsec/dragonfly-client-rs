@@ -54,7 +54,7 @@ struct Reply {
 }
 
 #[derive(Deserialize)]
-struct Acknowledgement {
+struct QuarantineResult {
     quarantined: usize,
 }
 
@@ -259,8 +259,12 @@ impl DurableCache {
             .cloned()
             .ok_or_else(|| color_eyre::eyre::eyre!("Missing cache key for quarantine"))?;
         self.hits.remove(local);
-        self.pending.clear();
-        self.pending_bytes = 0;
+        self.pending.retain(|value| value.key != key);
+        self.pending_bytes = self
+            .pending
+            .iter()
+            .map(|value| serde_json::to_vec(value).map(|bytes| bytes.len()))
+            .sum::<std::result::Result<usize, _>>()?;
         if !self.quarantines.contains(&key) {
             ensure!(
                 self.quarantines.len() < 4096,
@@ -275,11 +279,14 @@ impl DurableCache {
         while !self.quarantines.is_empty() && self.available() {
             let count = self.quarantines.len().min(BATCH_SIZE);
             let body = serde_json::json!({"context":self.context,"lease":self.lease,"entries":[],"quarantine":self.quarantines[..count]});
-            let reply: Acknowledgement = self.post("write", &body)?;
+            let reply: QuarantineResult = self.post("write", &body)?;
             ensure!(
                 reply.quarantined <= count,
                 "Invalid quarantine acknowledgement"
             );
+            // HTTP success commits the entire Mainframe transaction. This count is
+            // newly changed rows, not per-key acknowledgements: already quarantined
+            // or expired/absent entries contribute zero and require no retry.
             self.quarantines.drain(..count);
         }
         Ok(())
@@ -442,6 +449,35 @@ mod tests {
         assert!(cache.lookup::<Vec<u8>>("local").unwrap().is_none());
         server.join().unwrap();
         assert_eq!(rx.try_iter().count(), 1);
+    }
+
+    #[test]
+    fn quarantine_keeps_unrelated_writes_and_accepts_idempotent_zero_changes() {
+        let (url, rx, server) = server(vec![
+            (200, "{\"revoked\":false,\"entries\":[]}".into()),
+            (200, "{\"quarantined\":0}".into()),
+            (200, "{\"inserted\":1}".into()),
+        ]);
+        let mut cache = client(&url);
+        let good = (
+            "good".to_owned(),
+            Key {
+                file_digest: "b".repeat(64),
+                language: "py".into(),
+            },
+        );
+        cache.prefetch(&[key(), good]).unwrap();
+        cache.insert("local", &vec![1_u8]).unwrap();
+        cache.insert("good", &vec![7_u8]).unwrap();
+        cache.quarantine("local").unwrap();
+        assert!(cache.quarantines.is_empty());
+        assert!(!cache.revoked);
+        cache.flush().unwrap();
+        server.join().unwrap();
+        let bodies = rx.try_iter().collect::<Vec<_>>();
+        assert_eq!(bodies[2]["entries"].as_array().unwrap().len(), 1);
+        assert_eq!(bodies[2]["entries"][0]["file_digest"], "b".repeat(64));
+        assert_eq!(bodies[2]["entries"][0]["result"], "[7]");
     }
 
     #[test]
