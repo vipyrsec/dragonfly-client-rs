@@ -78,11 +78,12 @@ pub struct RulesResponse {
 impl RulesResponse {
     /// Compile the rules from the response
     pub fn compile(&self) -> Result<Rules> {
-        let rules_str = self
-            .rules
-            .values()
-            .map(String::as_ref)
-            .collect::<Vec<&str>>()
+        let mut sources = self.rules.iter().collect::<Vec<_>>();
+        sources.sort_unstable_by_key(|(name, _)| *name);
+        let rules_str = sources
+            .into_iter()
+            .map(|(_, source)| source.as_str())
+            .collect::<Vec<_>>()
             .join("\n");
 
         let mut compiled_rules = Compiler::new()?
@@ -97,6 +98,27 @@ impl RulesResponse {
 #[cfg(test)]
 mod tests {
     use super::Job;
+
+    #[test]
+    fn independently_loaded_rules_compile_in_the_same_order() {
+        for _ in 0..16 {
+            let response: super::RulesResponse = serde_json::from_str(
+                r#"{
+                "hash":"same", "rules":{
+                    "z":"rule last { condition: true }",
+                    "a":"rule first { condition: true }"
+                }
+            }"#,
+            )
+            .unwrap();
+            let rules = response.compile().unwrap();
+            let matches = rules.scan_mem(b"same bytes", 10).unwrap();
+            assert_eq!(
+                matches.iter().map(|r| r.identifier).collect::<Vec<_>>(),
+                vec!["first", "last"]
+            );
+        }
+    }
 
     #[test]
     fn job_deserializes_assignment_lease() {

@@ -15,7 +15,7 @@ use yara::Rules;
 
 use crate::{exts::RuleExt, scanner::RuleScore};
 
-#[derive(Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 struct ContentMatch {
     score: RuleScore,
     filetypes: Vec<String>,
@@ -118,9 +118,12 @@ impl<'a> ScanCache<'a> {
         } else {
             format!("{:032x}:{}", identity.0, size)
         };
-        let cached = self
+        let mut cached = self
             .reuse
             .and_then(|cache| cache.lookup::<Vec<ContentMatch>>(&key, path, &mut self.stats));
+        if let Some(matches) = &mut cached {
+            canonicalize(matches);
+        }
         let reuse_enabled = cached.is_some()
             && self
                 .reuse
@@ -135,7 +138,7 @@ impl<'a> ScanCache<'a> {
             self.stats.engine_bytes += size;
             let scanned = self.rules.scan_file(path, 10);
             self.stats.engine_us += started.elapsed().as_micros();
-            let matches: Vec<_> = scanned?
+            let mut matches: Vec<_> = scanned?
                 .into_iter()
                 .map(|rule| ContentMatch {
                     filetypes: rule
@@ -146,18 +149,16 @@ impl<'a> ScanCache<'a> {
                     score: RuleScore::from(rule),
                 })
                 .collect();
+            canonicalize(&mut matches);
             self.scanned_files += 1;
             if let Some(previous) = cached {
                 self.stats.validated_files += 1;
                 if previous != matches {
                     self.stats.mismatched_files += 1;
                     if let Some(cache) = self.reuse {
-                        cache.disable();
+                        cache.quarantine(&key, &mut self.stats);
                     }
-                    tracing::error!(
-                        event = "scan_reuse_mismatch",
-                        "Cached YARA results differ from fresh scan"
-                    );
+                    report_mismatch(path, &hashes.sha256, &previous, &matches);
                     if self.stats.reused_files > 0 {
                         color_eyre::eyre::bail!("Cache validation failed; cached results for this job must be discarded");
                     }
@@ -199,6 +200,33 @@ impl<'a> ScanCache<'a> {
         }
         Ok(result)
     }
+}
+
+fn report_mismatch(path: &Path, digest: &str, previous: &[ContentMatch], matches: &[ContentMatch]) {
+    tracing::error!(
+        event = "scan_reuse_mismatch",
+        file_sha256 = %digest,
+        file_path = %path.display(),
+        cached_count = previous.len(),
+        fresh_count = matches.len(),
+        cached_matches = ?previous.iter().take(16).collect::<Vec<_>>(),
+        fresh_matches = ?matches.iter().take(16).collect::<Vec<_>>(),
+        "Cached YARA findings differ from fresh scan; quarantining this file"
+    );
+}
+
+fn canonicalize(matches: &mut [ContentMatch]) {
+    for matched in matches.iter_mut() {
+        matched.filetypes.sort_unstable();
+        matched.filetypes.dedup();
+    }
+    matches.sort_unstable_by(|a, b| {
+        (&a.score.name, a.score.score, &a.filetypes).cmp(&(
+            &b.score.name,
+            b.score.score,
+            &b.filetypes,
+        ))
+    });
 }
 
 fn matches_for_path(matches: &[ContentMatch], path: &Path) -> Vec<RuleScore> {
@@ -278,7 +306,59 @@ mod tests {
     }
 
     #[test]
-    fn a_sample_mismatch_preserves_fresh_results_and_disables_reuse() {
+    fn cache_validation_ignores_order_but_preserves_findings_and_filters() {
+        use super::{canonicalize, ContentMatch};
+        use crate::{
+            reuse_cache::{CacheMode, CacheStats, ReuseCache},
+            scanner::RuleScore,
+        };
+        let rules = rules();
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("danger.py");
+        fs::write(&path, b"danger").unwrap();
+        let old = vec![
+            ContentMatch {
+                score: RuleScore {
+                    name: "python".into(),
+                    score: 5,
+                },
+                filetypes: vec![".pyi".into(), ".py".into()],
+            },
+            ContentMatch {
+                score: RuleScore {
+                    name: "compound_suffix".into(),
+                    score: 3,
+                },
+                filetypes: vec!["special.txt".into()],
+            },
+        ];
+        let shared = ReuseCache::new(CacheMode::Observe, 10, 4096);
+        let key = format!("{:032x}:6", hash_file(&path).unwrap().fast);
+        shared.insert(
+            key,
+            &path,
+            &old,
+            &mut CacheStats::new("yara", CacheMode::Observe),
+        );
+        let mut scan = ScanCache::new(&rules, 10, 4096).unwrap();
+        scan.set_reuse(Some(&shared));
+        assert_eq!(scan.scan(&path, 1024).unwrap().len(), 1);
+        assert_eq!(scan.stats.validated_files, 1);
+        assert_eq!(scan.stats.mismatched_files, 0);
+        let mut canonical = old;
+        canonicalize(&mut canonical);
+        let mut changed = canonical.clone();
+        changed[0].score.score += 1;
+        canonicalize(&mut changed);
+        assert_ne!(canonical, changed);
+        changed = canonical.clone();
+        changed[0].filetypes.push(".sh".into());
+        canonicalize(&mut changed);
+        assert_ne!(canonical, changed);
+    }
+
+    #[test]
+    fn a_sample_mismatch_preserves_fresh_results_and_quarantines_only_that_key() {
         use crate::reuse_cache::{CacheMode, CacheStats, ReuseCache};
         let rules = rules();
         let dir = tempdir().unwrap();
@@ -299,7 +379,25 @@ mod tests {
         cache.set_reuse(Some(&shared));
         assert_eq!(cache.scan(&path, 1024).unwrap().len(), 1);
         assert_eq!(cache.stats.mismatched_files, 1);
-        assert!(shared.is_disabled());
+        assert!(!shared.is_disabled());
+        let key = format!("{:032x}:6", hash_file(&path).unwrap().fast);
+        assert!(shared
+            .lookup::<Vec<super::ContentMatch>>(&key, &path, &mut setup)
+            .is_none());
+        shared.insert(
+            key.clone(),
+            &path,
+            &Vec::<super::ContentMatch>::new(),
+            &mut setup,
+        );
+        assert!(shared
+            .lookup::<Vec<super::ContentMatch>>(&key, &path, &mut setup)
+            .is_none());
+        shared.insert("unrelated".into(), &path, &vec![7_u8], &mut setup);
+        assert_eq!(
+            shared.lookup::<Vec<u8>>("unrelated", &path, &mut setup),
+            Some(vec![7])
+        );
     }
 
     #[test]

@@ -230,9 +230,18 @@ Lookups/writes use batches of at most 128 files. Results are limited to 16 KiB/f
 and 512 KiB/write; temporary read results are capped at 16 MiB/job. A transport
 failure stops further cache calls for that job. Requests time out after 750 ms;
 new requests stop after two seconds of accumulated cache network time per job.
-Unavailable cache entries are scanned normally. Sampled mismatches request
-persistent namespace revocation and discard jobs that consumed cached output.
-Revocation failures are logged explicitly.
+Unavailable cache entries are scanned normally. Rule sources and match results are
+ordered deterministically; equivalent finding order never triggers invalidation.
+A sampled finding mismatch quarantines only that file hash/language in the current
+namespace, retaining the row as evidence until normal expiry. Hits and duplicate
+writes cannot clear quarantine. Other files remain reusable. Jobs that already
+consumed cached output are rejected; the fresh result is retained when no earlier
+cached output was used. Diagnostics include SHA-256, path, result counts and up to
+16 cached/fresh matches. Failed quarantine requests remain blocked locally and
+retry before the next job's lookups. Local quarantine state is capped at 4,096 keys;
+exhausting that safety budget disables only this process's reuse. Generation
+revocation remains available on the server for broader incidents; a YARA sample
+mismatch no longer requests it.
 
 The server enforces separate connection, rate, storage and expiry budgets.
 Database inserts are measured by `scanner_cache_rows_inserted_total`; the worker

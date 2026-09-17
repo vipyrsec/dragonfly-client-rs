@@ -1,7 +1,7 @@
 //! Bounded process-local results. A cache belongs to one loaded rules snapshot.
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     fs,
     path::Path,
     sync::{
@@ -30,6 +30,7 @@ struct State {
     entries: HashMap<String, Entry>,
     order: VecDeque<String>,
     bytes: usize,
+    quarantined: HashSet<String>,
 }
 
 pub(crate) struct ReuseCache {
@@ -127,6 +128,45 @@ impl ReuseCache {
         self.disabled.load(Ordering::Acquire)
     }
 
+    pub(crate) fn quarantine(&self, key: &str, stats: &mut CacheStats) {
+        let Ok(mut storage) = self.state.lock() else {
+            self.disabled.store(true, Ordering::Release);
+            stats.errors += 1;
+            tracing::error!(
+                event = "scan_cache_quarantine_failed",
+                "Cache lock poisoned; disabling local reuse"
+            );
+            return;
+        };
+        // Quarantine failures remain blocked locally and retry on the next job.
+        if storage.quarantined.len() >= 4096 {
+            self.disabled.store(true, Ordering::Release);
+            stats.errors += 1;
+            tracing::error!(
+                event = "scan_cache_quarantine_failed",
+                "Local quarantine capacity reached; disabling local reuse"
+            );
+            return;
+        }
+        storage.quarantined.insert(key.to_owned());
+        if let Some(entry) = storage.entries.remove(key) {
+            storage.bytes -= entry.content.len() + entry.result.len();
+        }
+        storage.order.retain(|entry| entry != key);
+        drop(storage);
+        self.remote_operation(stats, |remote| remote.quarantine(key));
+    }
+
+    fn is_quarantined(&self, key: &str) -> color_eyre::Result<bool> {
+        Ok(self
+            .state
+            .lock()
+            .map_err(|_| color_eyre::eyre::eyre!("cache lock poisoned"))?
+            .quarantined
+            .contains(key))
+    }
+
+    #[cfg(test)]
     pub(crate) fn disable(&self) {
         self.disabled.store(true, Ordering::Release);
         if let Some(remote) = &self.remote {
@@ -172,6 +212,9 @@ impl ReuseCache {
     }
 
     fn read<T: DeserializeOwned>(&self, key: &str, path: &Path) -> color_eyre::Result<Option<T>> {
+        if self.is_quarantined(key)? {
+            return Ok(None);
+        }
         if let Some(remote) = &self.remote {
             return remote
                 .lock()
@@ -220,6 +263,9 @@ impl ReuseCache {
         value: &T,
         stats: &mut CacheStats,
     ) -> color_eyre::Result<()> {
+        if self.is_quarantined(&key)? {
+            return Ok(());
+        }
         if let Some(remote) = &self.remote {
             return remote
                 .lock()
